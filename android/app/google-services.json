@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "1099457328834",
+    "project_id": "screentime-ecebd",
+    "storage_bucket": "screentime-ecebd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1099457328834:android:2c24e211b18b696ef16d5b",
+        "android_client_info": {
+          "package_name": "com.example.parental_monitor"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1099457328834-es8fee0j1hhhvgmcakk3phakrc2h5vl5.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.parental_monitor",
+            "certificate_hash": "45f8f8a5720c94a80a73d9c006978d78407a96c6"
+          }
+        },
+        {
+          "client_id": "1099457328834-gdvprecd7mopgne2d54eaallcqb9qat6.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyADPloOV-Yc3zpCPMr-Kj26nj6KRbbsA_k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1099457328834-gdvprecd7mopgne2d54eaallcqb9qat6.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
