@@ -17,9 +17,18 @@
     
     <!-- Required for app blocking overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    
+    <!-- Required for battery optimization exemption -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    
+    <!-- Required for wake lock to keep service alive -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    
+    <!-- Required for reliable alarms on Android 12+ -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
-        android:label="Parental Monitor"
+        android:label="App Usage Tracker"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
@@ -52,11 +61,29 @@
         <service
             android:name=".AppBlockerService"
             android:foregroundServiceType="dataSync"
+            android:stopWithTask="false"
             android:exported="false" />
 
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        
+        <!-- Boot receiver for auto-starting services -->
+        <receiver
+            android:name=".ServiceRestartReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="com.example.parental_monitor.RESTART_SERVICE" />
+            </intent-filter>
+        </receiver>
+        
+        <!-- Watchdog job service for periodic service health checks -->
+        <service
+            android:name=".ServiceWatchdog"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
     </application>
     
     <queries>

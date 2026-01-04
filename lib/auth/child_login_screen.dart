@@ -82,28 +82,49 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
   }
 
   Future<void> _googleLogin() async {
-    final googleUser = await GoogleSignIn().signIn();
-    if (googleUser == null) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
 
-    final googleAuth = await googleUser.authentication;
+    try {
+      final googleUser = await GoogleSignIn().signIn();
+      if (googleUser == null) {
+        setState(() {
+          _loading = false;
+          _error = 'Google sign-in was cancelled';
+        });
+        return;
+      }
 
-    final credential = GoogleAuthProvider.credential(
-      accessToken: googleAuth.accessToken,
-      idToken: googleAuth.idToken,
-    );
+      final googleAuth = await googleUser.authentication;
 
-    await FirebaseAuth.instance.signInWithCredential(credential);
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
 
-    // Save role
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('userRole', 'child');
+      await FirebaseAuth.instance.signInWithCredential(credential);
 
-    if (!mounted) return;
+      // Save role
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('userRole', 'child');
 
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const ChildHomeScreen()),
-    );
+      if (!mounted) return;
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const ChildHomeScreen()),
+      );
+    } on FirebaseAuthException catch (e) {
+      setState(() => _error = e.message ?? 'Google sign-in failed');
+    } catch (e) {
+      setState(() => _error = 'Google sign-in failed: ${e.toString()}');
+    }
+
+    if (mounted) {
+      setState(() => _loading = false);
+    }
   }
 
   @override

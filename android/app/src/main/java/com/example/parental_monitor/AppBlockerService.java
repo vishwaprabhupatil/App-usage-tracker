@@ -1,8 +1,10 @@
 package com.example.parental_monitor;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.app.usage.UsageEvents;
 import android.app.usage.UsageStatsManager;
@@ -24,6 +26,7 @@ import androidx.core.app.NotificationCompat;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.Set;
 
 /**
@@ -35,6 +38,10 @@ public class AppBlockerService extends Service {
     private static final String CHANNEL_ID = "app_blocker_channel";
     private static final int NOTIFICATION_ID = 2001;
     private static final long CHECK_INTERVAL_MS = 500; // Check every 500ms
+    
+    // Heartbeat mechanism: record heartbeat every 3 minutes (180 seconds)
+    // This is used by ServiceHealthWorker to detect if the service is still alive
+    private static final long HEARTBEAT_INTERVAL_MS = HeartbeatManager.HEARTBEAT_INTERVAL_MS;
 
     private Handler handler;
     private Runnable checkRunnable;
@@ -46,15 +53,26 @@ public class AppBlockerService extends Service {
     // Blocked apps list (package names)
     private static Set<String> blockedApps = new HashSet<>();
     private static AppBlockerService instance;
+    private static boolean isServiceRunning = false;
+    
+    // Heartbeat tracking
+    private HeartbeatManager heartbeatManager;
+    private AtomicLong lastHeartbeatUpdate = new AtomicLong(0);
 
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
+        isServiceRunning = true;
         handler = new Handler(Looper.getMainLooper());
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        
+        // Initialize heartbeat manager and record service start
+        heartbeatManager = new HeartbeatManager(this);
+        heartbeatManager.recordServiceStart();
+        lastHeartbeatUpdate.set(System.currentTimeMillis());
 
-        Log.d(TAG, "AppBlockerService created");
+        Log.d(TAG, "AppBlockerService created with heartbeat initialized");
     }
 
     @Override
@@ -66,7 +84,18 @@ public class AppBlockerService extends Service {
 
         // Start monitoring
         startMonitoring();
+        
+        // Schedule the health worker to monitor this service
+        // The worker will restart us if we stop unexpectedly
+        ServiceHealthWorker.scheduleHealthWorker(this);
+        
+        // Record heartbeat immediately on start
+        if (heartbeatManager != null) {
+            heartbeatManager.recordHeartbeat();
+        }
 
+        // Return START_STICKY to ensure the service is restarted if killed
+        // Also provide a restart intent
         return START_STICKY;
     }
 
@@ -75,15 +104,68 @@ public class AppBlockerService extends Service {
         super.onDestroy();
         Log.d(TAG, "AppBlockerService destroyed");
 
+        isServiceRunning = false;
         stopMonitoring();
         hideOverlay();
         instance = null;
+
+        // Schedule restart using AlarmManager (more reliable than broadcasts)
+        scheduleRestart();
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        super.onTaskRemoved(rootIntent);
+        Log.d(TAG, "Task removed - scheduling restart");
+        scheduleRestart();
+    }
+
+    /**
+     * Schedule a restart of this service using AlarmManager
+     * This is more reliable than broadcasts on Android 8+
+     */
+    private void scheduleRestart() {
+        try {
+            Intent restartIntent = new Intent(this, ServiceRestartReceiver.class);
+            restartIntent.setAction(ServiceRestartReceiver.ACTION_RESTART_SERVICE);
+
+            int flags = PendingIntent.FLAG_ONE_SHOT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                flags |= PendingIntent.FLAG_IMMUTABLE;
+            }
+
+            PendingIntent pendingIntent = PendingIntent.getBroadcast(
+                    this, 0, restartIntent, flags);
+
+            AlarmManager alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            if (alarmManager != null) {
+                long triggerTime = System.currentTimeMillis() + 1000; // Restart in 1 second
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent);
+                } else {
+                    alarmManager.setExact(
+                            AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent);
+                }
+                Log.d(TAG, "Restart scheduled via AlarmManager");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error scheduling restart: " + e.getMessage(), e);
+        }
     }
 
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
         return null;
+    }
+
+    /**
+     * Check if the service is currently running
+     */
+    public static boolean isServiceRunning() {
+        return isServiceRunning;
     }
 
     /**
@@ -142,11 +224,23 @@ public class AppBlockerService extends Service {
             @Override
             public void run() {
                 checkForegroundApp();
+                
+                // Update heartbeat periodically (every 3 minutes)
+                // This proves to the health worker that we're still alive
+                long now = System.currentTimeMillis();
+                long lastUpdate = lastHeartbeatUpdate.get();
+                if (now - lastUpdate >= HEARTBEAT_INTERVAL_MS) {
+                    if (heartbeatManager != null) {
+                        heartbeatManager.recordHeartbeat();
+                        lastHeartbeatUpdate.set(now);
+                    }
+                }
+                
                 handler.postDelayed(this, CHECK_INTERVAL_MS);
             }
         };
         handler.post(checkRunnable);
-        Log.d(TAG, "Started monitoring foreground apps");
+        Log.d(TAG, "Started monitoring foreground apps with heartbeat");
     }
 
     private void stopMonitoring() {

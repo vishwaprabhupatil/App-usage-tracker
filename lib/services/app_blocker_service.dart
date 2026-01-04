@@ -151,5 +151,95 @@ class AppBlockerService {
       debugPrint('AppBlocker: Error going to home: $e');
     }
   }
+  
+  /// Check if battery optimization is disabled (app is exempted)
+  static Future<bool> hasBatteryOptimizationExemption() async {
+    if (!Platform.isAndroid) return true;
+    
+    try {
+      final result = await platform.invokeMethod<bool>('checkBatteryOptimization');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('AppBlocker: Error checking battery optimization: $e');
+      return false;
+    }
+  }
+  
+  /// Request battery optimization exemption (opens system settings)
+  static Future<void> requestBatteryOptimizationExemption() async {
+    if (!Platform.isAndroid) return;
+    
+    try {
+      await platform.invokeMethod('requestBatteryOptimization');
+    } catch (e) {
+      debugPrint('AppBlocker: Error requesting battery optimization: $e');
+    }
+  }
+  
+  /// Start the watchdog service to ensure services stay alive
+  static Future<void> startWatchdog() async {
+    if (!Platform.isAndroid) return;
+    
+    try {
+      await platform.invokeMethod('startWatchdog');
+      debugPrint('AppBlocker: Watchdog service started');
+    } catch (e) {
+      debugPrint('AppBlocker: Error starting watchdog: $e');
+    }
+  }
+  
+  /// Get the last sync time from native side (milliseconds since epoch)
+  static Future<int> getLastSyncTime() async {
+    if (!Platform.isAndroid) return 0;
+    
+    try {
+      final result = await platform.invokeMethod<int>('getLastSyncTime');
+      return result ?? 0;
+    } catch (e) {
+      debugPrint('AppBlocker: Error getting last sync time: $e');
+      return 0;
+    }
+  }
+  
+  /// Update the last sync time on native side
+  static Future<void> updateLastSyncTime() async {
+    if (!Platform.isAndroid) return;
+    
+    try {
+      await platform.invokeMethod('updateLastSyncTime');
+      debugPrint('AppBlocker: Updated last sync time');
+    } catch (e) {
+      debugPrint('AppBlocker: Error updating last sync time: $e');
+    }
+  }
+  
+  /// Check status of all services
+  static Future<Map<String, dynamic>> checkAllServicesStatus() async {
+    if (!Platform.isAndroid) {
+      return {'appBlockerRunning': false, 'syncDue': false};
+    }
+    
+    try {
+      final result = await platform.invokeMethod<Map>('checkAllServicesStatus');
+      if (result != null) {
+        return Map<String, dynamic>.from(result);
+      }
+    } catch (e) {
+      debugPrint('AppBlocker: Error checking services status: $e');
+    }
+    return {'appBlockerRunning': false, 'syncDue': false};
+  }
+  
+  /// Restart all native services
+  static Future<void> restartAllServices() async {
+    if (!Platform.isAndroid) return;
+    
+    try {
+      await platform.invokeMethod('restartAllServices');
+      debugPrint('AppBlocker: All native services restarted');
+    } catch (e) {
+      debugPrint('AppBlocker: Error restarting all services: $e');
+    }
+  }
 }
 

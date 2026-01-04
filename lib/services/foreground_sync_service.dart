@@ -14,9 +14,14 @@ import 'app_blocker_service.dart';
 @pragma('vm:entry-point')
 class ScreenTimeSyncTaskHandler extends TaskHandler {
   Timer? _syncTimer;
+  static bool _isRunning = false;
+  
+  /// Check if the foreground task handler is running
+  static bool get isRunning => _isRunning;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    _isRunning = true;
     debugPrint('ForegroundTask: onStart');
     
     // Initialize Firebase in the isolate
@@ -40,6 +45,7 @@ class ScreenTimeSyncTaskHandler extends TaskHandler {
   @override
   Future<void> onDestroy(DateTime timestamp) async {
     debugPrint('ForegroundTask: onDestroy');
+    _isRunning = false;
     _syncTimer?.cancel();
   }
 
@@ -145,6 +151,13 @@ class ScreenTimeSyncTaskHandler extends TaskHandler {
 
       debugPrint('ForegroundTask: Synced - $totalFormatted, ${apps.length} apps');
       
+      // Update native sync time tracking
+      try {
+        await AppBlockerService.updateLastSyncTime();
+      } catch (e) {
+        debugPrint('ForegroundTask: Error updating native sync time: $e');
+      }
+      
       // Update notification with last sync time
       final now = DateTime.now();
       final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
@@ -226,6 +239,21 @@ class ForegroundSyncService {
       notificationText: 'Syncing screen time...',
       callback: startCallback,
     );
+    
+    if (result is ServiceRequestSuccess) {
+      // Start the watchdog to ensure services stay alive
+      try {
+        await AppBlockerService.startWatchdog();
+      } catch (e) {
+        debugPrint('ForegroundSyncService: Error starting watchdog: $e');
+      }
+      
+      // Request battery optimization exemption if not already granted
+      final hasExemption = await AppBlockerService.hasBatteryOptimizationExemption();
+      if (!hasExemption) {
+        debugPrint('ForegroundSyncService: Battery optimization not exempted');
+      }
+    }
     
     return result is ServiceRequestSuccess;
   }

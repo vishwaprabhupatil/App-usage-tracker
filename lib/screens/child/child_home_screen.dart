@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -26,6 +27,8 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
   bool _loading = true;
   bool _permissionDenied = false;
   bool _overlayPermissionGranted = false;
+  bool _batteryOptimizationExempted = false;
+  Timer? _healthCheckTimer;
 
   @override
   void initState() {
@@ -37,6 +40,8 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
     _startForegroundService();
     // Initialize app blocker
     _initAppBlocker();
+    // Start periodic health check for services
+    _startServiceHealthCheck();
   }
 
   Future<void> _startForegroundService() async {
@@ -89,6 +94,7 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _healthCheckTimer?.cancel();
     // Note: AppBlockerService.dispose() is async but we don't await it in dispose
     // The service will clean itself up
     AppBlockerService.dispose();
@@ -103,12 +109,21 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
       ForegroundSyncService.syncNow();
       // Check overlay permission
       _checkOverlayPermission();
+      // Check battery optimization
+      _checkBatteryOptimization();
+      // Restart health check when app resumes
+      _startServiceHealthCheck();
+      // Also run an immediate health check
+      _checkAndRestartServices();
+    } else if (state == AppLifecycleState.paused) {
+      // Keep the timer running in background - don't cancel
     }
   }
 
   Future<void> _initAppBlocker() async {
     await AppBlockerService.init();
     await _checkOverlayPermission();
+    await _checkBatteryOptimization();
     
     // Start the blocker service if permission is granted and there are blocked apps
     if (_overlayPermissionGranted && AppBlockerService.blockedApps.isNotEmpty) {
@@ -123,6 +138,52 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
         _overlayPermissionGranted = hasPermission;
       });
     }
+  }
+
+  Future<void> _checkBatteryOptimization() async {
+    final hasExemption = await AppBlockerService.hasBatteryOptimizationExemption();
+    if (mounted) {
+      setState(() {
+        _batteryOptimizationExempted = hasExemption;
+      });
+    }
+  }
+  
+  /// Start periodic service health check (every 5 minutes)
+  void _startServiceHealthCheck() {
+    _healthCheckTimer?.cancel();
+    // Check every 5 minutes when app is running
+    _healthCheckTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+      _checkAndRestartServices();
+    });
+    // Also run immediately
+    _checkAndRestartServices();
+  }
+  
+  /// Check if all services are running and restart if needed
+  Future<void> _checkAndRestartServices() async {
+    debugPrint('ChildHome: Running service health check...');
+    
+    // Check if foreground sync service is running
+    final isForegroundRunning = await ForegroundSyncService.isRunning();
+    if (!isForegroundRunning) {
+      debugPrint('ChildHome: Foreground service not running - restarting');
+      await ForegroundSyncService.startService();
+    }
+    
+    // Check native services status
+    final status = await AppBlockerService.checkAllServicesStatus();
+    final isBlockerRunning = status['appBlockerRunning'] as bool? ?? false;
+    
+    if (!isBlockerRunning) {
+      debugPrint('ChildHome: AppBlockerService not running - restarting');
+      await AppBlockerService.startBlockerService();
+    }
+    
+    // Ensure watchdog is scheduled
+    await AppBlockerService.startWatchdog();
+    
+    debugPrint('ChildHome: Health check complete - foreground: $isForegroundRunning, blocker: $isBlockerRunning');
   }
 
   Future<void> _loadUsage() async {
@@ -390,6 +451,54 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
       onRefresh: _loadUsage,
       child: CustomScrollView(
         slivers: [
+          // Battery optimization warning
+          if (!_batteryOptimizationExempted)
+            SliverToBoxAdapter(
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.battery_alert, color: Colors.blue),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Battery Optimization Active',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Disable battery optimization to keep monitoring active',
+                            style: TextStyle(
+                              color: Colors.blue.shade700,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        await AppBlockerService.requestBatteryOptimizationExemption();
+                      },
+                      child: const Text('Disable'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          
           // Overlay permission warning
           if (!_overlayPermissionGranted && AppBlockerService.blockedApps.isNotEmpty)
             SliverToBoxAdapter(

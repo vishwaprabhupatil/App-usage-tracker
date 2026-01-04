@@ -211,8 +211,6 @@ class ParentChildrenScreen extends StatelessWidget {
         }
         
         final status = getChildStatus(lastUpdated);
-        final statusColor = getStatusColor(status);
-        final statusText = getStatusText(status);
 
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
@@ -237,7 +235,7 @@ class ParentChildrenScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Top row: Avatar, Name, Status, Chevron
+                  // Top row: Avatar, Name, Chevron
                   Row(
                     children: [
                       // Avatar
@@ -275,40 +273,6 @@ class ParentChildrenScreen extends StatelessWidget {
                           ],
                         ),
                       ),
-                      // Status indicator
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: statusColor.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: statusColor,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              statusText,
-                              style: TextStyle(
-                                color: statusColor,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
                       const Icon(Icons.chevron_right),
                     ],
                   ),

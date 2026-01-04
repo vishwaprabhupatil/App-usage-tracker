@@ -1,5 +1,5 @@
 name: parental_monitor
-description: "A parental monitoring Flutter app."
+description: "App Usage Tracker - Monitor screen time and app usage."
 publish_to: 'none'
 
 version: 1.0.0+1
