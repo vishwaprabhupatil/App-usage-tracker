@@ -8,6 +8,13 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.util.Base64;
+import java.io.ByteArrayOutputStream;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -96,6 +103,14 @@ public class MainActivity extends FlutterActivity {
                                 case "runImmediateHealthCheck":
                                     runImmediateHealthCheck();
                                     result.success(true);
+                                    break;
+                                case "getPackageInstallerMetadata":
+                                    List<String> packageNames = call.argument("packages");
+                                    Integer iconSize = call.argument("iconSize");
+                                    result.success(getPackageInstallerMetadata(
+                                            packageNames != null ? packageNames : new ArrayList<>(),
+                                            iconSize != null ? iconSize : 48
+                                    ));
                                     break;
                                 default:
                                     result.notImplemented();
@@ -273,5 +288,73 @@ public class MainActivity extends FlutterActivity {
      */
     private void runImmediateHealthCheck() {
         ServiceHealthWorker.runImmediateHealthCheck(this);
+    }
+
+    /**
+     * Fetch package metadata (label, icon, installer) from Android package manager.
+     * This is used for syncing child app logos to the parent UI.
+     */
+    private Map<String, Object> getPackageInstallerMetadata(List<String> packages, int iconSizePx) {
+        Map<String, Object> output = new HashMap<>();
+        PackageManager pm = getPackageManager();
+        int safeSize = Math.max(24, Math.min(iconSizePx, 96));
+
+        for (String packageName : packages) {
+            if (packageName == null || packageName.trim().isEmpty()) continue;
+
+            try {
+                Map<String, Object> item = new HashMap<>();
+                android.content.pm.ApplicationInfo appInfo = pm.getApplicationInfo(packageName, 0);
+                CharSequence label = pm.getApplicationLabel(appInfo);
+                Drawable iconDrawable = pm.getApplicationIcon(packageName);
+
+                item.put("appName", label != null ? label.toString() : packageName);
+                item.put("iconBase64", drawableToBase64Png(iconDrawable, safeSize));
+
+                String installer = null;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    try {
+                        installer = pm.getInstallSourceInfo(packageName).getInstallingPackageName();
+                    } catch (Exception ignored) {
+                        installer = null;
+                    }
+                } else {
+                    try {
+                        installer = pm.getInstallerPackageName(packageName);
+                    } catch (Exception ignored) {
+                        installer = null;
+                    }
+                }
+                if (installer != null) {
+                    item.put("installerPackage", installer);
+                }
+
+                output.put(packageName, item);
+            } catch (Exception ignored) {
+                // Skip packages that are no longer installed or inaccessible.
+            }
+        }
+
+        return output;
+    }
+
+    private String drawableToBase64Png(Drawable drawable, int targetSizePx) {
+        if (drawable == null) return "";
+
+        Bitmap bitmap;
+        if (drawable instanceof BitmapDrawable) {
+            Bitmap src = ((BitmapDrawable) drawable).getBitmap();
+            bitmap = Bitmap.createScaledBitmap(src, targetSizePx, targetSizePx, true);
+        } else {
+            bitmap = Bitmap.createBitmap(targetSizePx, targetSizePx, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bitmap);
+            drawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+            drawable.draw(canvas);
+        }
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
+        byte[] bytes = out.toByteArray();
+        return Base64.encodeToString(bytes, Base64.NO_WRAP);
     }
 }

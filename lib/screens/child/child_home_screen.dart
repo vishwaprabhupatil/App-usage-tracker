@@ -2,11 +2,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../services/usage_service.dart';
 import '../../services/usage_permission_service.dart';
 import '../../services/foreground_sync_service.dart';
+import '../../services/screentime_sync_service.dart';
 import '../../services/app_blocker_service.dart';
 import '../../theme/theme_controller.dart';
 import '../../auth/auth_service.dart';
@@ -47,7 +47,17 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
   Future<void> _startForegroundService() async {
     // Delay slightly to ensure the home screen is fully visible
     await Future.delayed(const Duration(milliseconds: 500));
-    await ForegroundSyncService.startService();
+    final started = await ForegroundSyncService.startService();
+
+    if (started) {
+      // Foreground path is available, no need for in-app timer fallback.
+      ScreentimeSyncService.stopAutoSync();
+      await ForegroundSyncService.triggerSyncNow();
+    } else {
+      // Fallback for devices that block/kill foreground service.
+      ScreentimeSyncService.startAutoSync();
+      await ScreentimeSyncService.syncNow();
+    }
     
     // After notification permission is handled, check for overlay permission
     // and show a dialog if needed
@@ -95,6 +105,7 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _healthCheckTimer?.cancel();
+    ScreentimeSyncService.stopAutoSync();
     // Note: AppBlockerService.dispose() is async but we don't await it in dispose
     // The service will clean itself up
     AppBlockerService.dispose();
@@ -105,8 +116,8 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _loadUsage();
-      // Trigger immediate sync via foreground service
-      ForegroundSyncService.syncNow();
+      // Trigger immediate sync with direct-write fallback if service is down.
+      ForegroundSyncService.triggerSyncNow();
       // Check overlay permission
       _checkOverlayPermission();
       // Check battery optimization
@@ -168,7 +179,15 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
     final isForegroundRunning = await ForegroundSyncService.isRunning();
     if (!isForegroundRunning) {
       debugPrint('ChildHome: Foreground service not running - restarting');
-      await ForegroundSyncService.startService();
+      final started = await ForegroundSyncService.startService();
+      if (!started) {
+        // Keep syncing while app is open on restrictive devices.
+        ScreentimeSyncService.startAutoSync();
+      } else {
+        ScreentimeSyncService.stopAutoSync();
+      }
+    } else {
+      ScreentimeSyncService.stopAutoSync();
     }
     
     // Check native services status
@@ -339,6 +358,7 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
               Navigator.pop(ctx);
               // Stop the foreground sync service
               await ForegroundSyncService.stopService();
+              ScreentimeSyncService.stopAutoSync();
               await AuthService().logout();
               if (context.mounted) {
                 // Navigate to role selection and clear stack

@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import 'child_pairing_screen.dart';
-import 'child_home.dart';
+import 'child/parent_link_screen.dart';
+import 'child/child_home_screen.dart';
 
 class ChildEntryScreen extends StatelessWidget {
   const ChildEntryScreen({super.key});
@@ -13,7 +13,7 @@ class ChildEntryScreen extends StatelessWidget {
     final uid = FirebaseAuth.instance.currentUser!.uid;
 
     return FutureBuilder<DocumentSnapshot>(
-      future: FirebaseFirestore.instance.collection('users').doc(uid).get(),
+      future: FirebaseFirestore.instance.collection('children').doc(uid).get(),
       builder: (context, snapshot) {
         // Loading
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -22,19 +22,20 @@ class ChildEntryScreen extends StatelessWidget {
           );
         }
 
-        // ❗ Document does not exist yet
+        // Child is not linked to a parent yet
         if (!snapshot.hasData || !snapshot.data!.exists) {
-          return const ChildPairingScreen();
+          return const ParentLinkScreen();
         }
 
         final data = snapshot.data!.data() as Map<String, dynamic>?;
+        final parentId = (data?['parentId'] ?? data?['parentUid']) as String?;
 
-        // ❗ Data is null or parent not linked
-        if (data == null || data['parentId'] == null) {
-          return const ChildPairingScreen();
+        // Child doc exists but no parent assigned
+        if (data == null || parentId == null || parentId.isEmpty) {
+          return const ParentLinkScreen();
         }
 
-        // ✅ Child already paired
+        // Child already paired
         return const ChildHomeScreen();
       },
     );

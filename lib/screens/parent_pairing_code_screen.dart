@@ -1,7 +1,6 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/pairing_service.dart';
 
 import 'parent_children_screen.dart';
 
@@ -29,44 +28,13 @@ class _ParentPairingCodeScreenState extends State<ParentPairingCodeScreen> {
     setState(() => _loading = true);
 
     try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
-      final parentDoc = FirebaseFirestore.instance.collection('parents').doc(uid);
-      
-      // Check if parent already has a code
-      final snapshot = await parentDoc.get();
-      
-      if (snapshot.exists && snapshot.data()?['pairingCode'] != null) {
-        // Use existing code
+      final code = await PairingService.ensureParentPairingCode(
+        parentName: FirebaseAuth.instance.currentUser?.displayName,
+      );
+      if (mounted) {
         setState(() {
-          _pairingCode = snapshot.data()!['pairingCode'];
+          _pairingCode = code;
         });
-      } else {
-        // Generate new permanent code
-        String code;
-        bool codeExists = true;
-        
-        // Ensure unique code
-        while (codeExists) {
-          code = (100000 + Random().nextInt(900000)).toString();
-          final existing = await FirebaseFirestore.instance
-              .collection('parents')
-              .where('pairingCode', isEqualTo: code)
-              .get();
-          codeExists = existing.docs.isNotEmpty;
-          
-          if (!codeExists) {
-            // Save permanently
-            await parentDoc.set({
-              'pairingCode': code,
-              'name': FirebaseAuth.instance.currentUser!.displayName ?? 'Parent',
-              'createdAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-            
-            setState(() {
-              _pairingCode = code;
-            });
-          }
-        }
       }
     } catch (e) {
       debugPrint('Error loading/generating code: $e');
@@ -77,7 +45,9 @@ class _ParentPairingCodeScreenState extends State<ParentPairingCodeScreen> {
       }
     }
 
-    setState(() => _loading = false);
+    if (mounted) {
+      setState(() => _loading = false);
+    }
   }
 
   @override
@@ -116,7 +86,7 @@ class _ParentPairingCodeScreenState extends State<ParentPairingCodeScreen> {
             Container(
               padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 40),
               decoration: BoxDecoration(
-                color: Theme.of(context).primaryColor.withOpacity(0.1),
+                color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: Theme.of(context).primaryColor,

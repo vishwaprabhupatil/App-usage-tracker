@@ -121,7 +121,12 @@ class ParentChildrenScreen extends StatelessWidget {
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
             .collection('children')
-            .where('parentId', isEqualTo: parentId)
+            .where(
+              Filter.or(
+                Filter('parentId', isEqualTo: parentId),
+                Filter('sharedParentIds', arrayContains: parentId),
+              ),
+            )
             .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -134,18 +139,18 @@ class ParentChildrenScreen extends StatelessWidget {
 
           final children = snapshot.data?.docs ?? [];
 
-          if (children.isEmpty) {
-            return _buildEmptyState(context);
-          }
+              if (children.isEmpty) {
+                return _buildEmptyState(context);
+              }
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: children.length,
-            itemBuilder: (context, index) {
-              final doc = children[index];
-              return _buildChildCard(context, doc);
-            },
-          );
+              return ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: children.length,
+                itemBuilder: (context, index) {
+                  final doc = children[index];
+                  return _buildChildCard(context, doc);
+                },
+              );
         },
       ),
     );
@@ -398,6 +403,7 @@ class ParentChildrenScreen extends StatelessWidget {
         break;
     }
   }
+
 
   void _showLogoutConfirmation(BuildContext context) {
     showDialog(

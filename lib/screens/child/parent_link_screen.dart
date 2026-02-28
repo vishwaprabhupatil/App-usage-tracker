@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../services/foreground_sync_service.dart';
 
 /// Screen for child to enter parent's 6-digit code to link accounts.
 class ParentLinkScreen extends StatefulWidget {
@@ -40,9 +41,11 @@ class _ParentLinkScreenState extends State<ParentLinkScreen> {
           .doc(uid)
           .get();
 
-      if (childDoc.exists && childDoc.data()?['parentId'] != null) {
+      final data = childDoc.data();
+      final parentId = (data?['parentId'] ?? data?['parentUid']) as String?;
+
+      if (childDoc.exists && parentId != null && parentId.isNotEmpty) {
         // Already linked - get parent name
-        final parentId = childDoc.data()!['parentId'];
         final parentDoc = await FirebaseFirestore.instance
             .collection('parents')
             .doc(parentId)
@@ -108,6 +111,9 @@ class _ParentLinkScreenState extends State<ParentLinkScreen> {
         'apps': [],
         'lastUpdated': FieldValue.serverTimestamp(),
       });
+      
+      // Trigger immediate sync so parent sees data right away
+      await ForegroundSyncService.triggerSyncNow();
 
       setState(() {
         _linked = true;

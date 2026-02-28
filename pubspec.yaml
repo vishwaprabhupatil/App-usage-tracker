@@ -2,7 +2,7 @@ name: parental_monitor
 description: "App Usage Tracker - Monitor screen time and app usage."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.2+3
 
 environment:
   sdk: ^3.5.4
@@ -27,6 +27,8 @@ dependencies:
   usage_stats: ^1.3.1
   installed_apps: ^2.1.0
   flutter_foreground_task: ^8.10.5
+  fl_chart: 0.69.2
+  intl: ^0.20.2
 
 dev_dependencies:
   flutter_test:
@@ -39,10 +41,14 @@ flutter:
   uses-material-design: true
 
   assets:
+    - assets/logo.png
     - assets/icons/app_icon.png
     - assets/icons/google_logo.png
 
 flutter_launcher_icons:
   android: true
-  image_path: "assets/icons/app_icon.png"
+  image_path: "assets/logo.png"
+  adaptive_icon_foreground: "assets/logo.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground_inset: 24
   min_sdk_android: 23

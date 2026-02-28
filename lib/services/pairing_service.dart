@@ -12,20 +12,53 @@ class PairingService {
     return (100000 + random.nextInt(900000)).toString();
   }
 
-  /// Save pairing code for parent
-  static Future<String> createParentPairingCode() async {
+  /// Ensures the current parent has a permanent unique 6-digit pairing code.
+  /// Returns the existing code if present, otherwise generates and stores a new one.
+  static Future<String> ensureParentPairingCode({String? parentName}) async {
     final user = _auth.currentUser;
     if (user == null) throw Exception('User not logged in');
 
-    final code = generatePairingCode();
+    final parentRef = _firestore.collection('parents').doc(user.uid);
+    final parentSnapshot = await parentRef.get();
+    final existingCode = parentSnapshot.data()?['pairingCode']?.toString();
 
-    await _firestore.collection('parents').doc(user.uid).set({
-      'email': user.email,
-      'pairingCode': code,
-      'createdAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    if (_isValidPairingCode(existingCode)) {
+      return existingCode!;
+    }
 
-    return code;
+    // Retry bounded times to avoid an infinite loop on unexpected failures.
+    for (var attempt = 0; attempt < 20; attempt++) {
+      final code = generatePairingCode();
+      final existing = await _firestore
+          .collection('parents')
+          .where('pairingCode', isEqualTo: code)
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) continue;
+
+      await parentRef.set({
+        'pairingCode': code,
+        'name': parentName ?? user.displayName ?? 'Parent',
+        'email': user.email,
+        'updatedAt': FieldValue.serverTimestamp(),
+        if (!parentSnapshot.exists) 'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      return code;
+    }
+
+    throw Exception('Could not generate a unique pairing code. Please try again.');
+  }
+
+  static bool _isValidPairingCode(String? code) {
+    if (code == null) return false;
+    return RegExp(r'^\d{6}$').hasMatch(code);
+  }
+
+  /// Save pairing code for parent
+  static Future<String> createParentPairingCode() async {
+    return ensureParentPairingCode();
   }
 
   /// Child uses code to link to parent

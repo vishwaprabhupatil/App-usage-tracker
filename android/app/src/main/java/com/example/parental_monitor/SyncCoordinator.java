@@ -15,7 +15,7 @@ public class SyncCoordinator {
     private static final String KEY_LAST_BLOCKER_CHECK = "last_blocker_check";
 
     // Sync intervals
-    public static final long SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes for data sync
+    public static final long SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes for data sync
     public static final long BLOCKER_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes for blocker check
 
     private final SharedPreferences prefs;

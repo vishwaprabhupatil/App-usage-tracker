@@ -12,6 +12,8 @@ class AppBlockerService {
   static const platform = MethodChannel('com.example.parental_monitor/overlay');
   
   static List<String> _blockedApps = [];
+  static Map<String, int> _appLimits = {};
+  static List<String> _overLimitApps = [];
   static StreamSubscription? _blockedAppsSubscription;
   static bool _isInitialized = false;
   static bool _serviceStarted = false;
@@ -32,17 +34,24 @@ class AppBlockerService {
         .listen((snapshot) async {
       if (snapshot.exists) {
         final data = snapshot.data();
+        
+        // Manual Blocks
         final blockedList = data?['blockedApps'] as List<dynamic>?;
         _blockedApps = blockedList?.cast<String>() ?? [];
-        debugPrint('AppBlocker: Blocked apps updated: $_blockedApps');
         
-        // Sync blocked apps to native service
-        await _syncBlockedAppsToNative();
-        
-        // Start or stop the blocker service based on whether there are blocked apps
-        if (_blockedApps.isNotEmpty) {
-          await startBlockerService();
+        // App Limits
+        final limitsMap = data?['appLimits'] as Map<String, dynamic>?;
+        if (limitsMap != null) {
+          _appLimits = limitsMap.map((key, value) => MapEntry(key, value as int));
+        } else {
+          _appLimits = {};
         }
+        
+        debugPrint('AppBlocker: Settings updated. Blocked: $_blockedApps, Limits: $_appLimits');
+        
+        // Triger a re-sync to native (Foreground task actually calculates over-limit apps, but we can do a quick check here too if needed, though foreground task will do it continuously)
+        // For now just sync manual blocks, overlimit will be appended by `updateOverLimitApps`
+        await _syncBlockedAppsToNative();
       }
     });
     
@@ -86,13 +95,26 @@ class AppBlockerService {
     }
   }
   
-  /// Sync the blocked apps list to the native service
+  /// Update the list of over-limit apps (called from ForegroundSyncService)
+  static Future<void> updateOverLimitApps(List<String> overLimitApps) async {
+    _overLimitApps = overLimitApps;
+    await _syncBlockedAppsToNative();
+  }
+  
+  /// Sync the combined blocked apps list to the native service
   static Future<void> _syncBlockedAppsToNative() async {
     if (!Platform.isAndroid) return;
     
+    // Combine manual blocks and over-limit blocks
+    final combinedBlockedApps = <String>{..._blockedApps, ..._overLimitApps}.toList();
+    
+    if (combinedBlockedApps.isNotEmpty) {
+      await startBlockerService();
+    }
+    
     try {
-      await platform.invokeMethod('updateBlockedApps', {'apps': _blockedApps});
-      debugPrint('AppBlocker: Synced ${_blockedApps.length} blocked apps to native');
+      await platform.invokeMethod('updateBlockedApps', {'apps': combinedBlockedApps});
+      debugPrint('AppBlocker: Synced ${combinedBlockedApps.length} total blocked apps to native');
     } catch (e) {
       debugPrint('AppBlocker: Error syncing blocked apps: $e');
     }
@@ -104,18 +126,23 @@ class AppBlockerService {
     _blockedAppsSubscription = null;
     _isInitialized = false;
     _blockedApps = [];
+    _appLimits = {};
+    _overLimitApps = [];
     
     // Stop the native service
     await stopBlockerService();
   }
   
-  /// Get list of currently blocked apps
-  static List<String> get blockedApps => List.unmodifiable(_blockedApps);
+  /// Get list of currently blocked apps (manual + limits)
+  static List<String> get blockedApps => List.unmodifiable([..._blockedApps, ..._overLimitApps]);
   
   /// Check if a package is blocked
   static bool isBlocked(String packageName) {
-    return _blockedApps.contains(packageName);
+    return _blockedApps.contains(packageName) || _overLimitApps.contains(packageName);
   }
+  
+  /// Get the configured limits
+  static Map<String, int> get appLimits => Map.unmodifiable(_appLimits);
   
   /// Check if overlay permission is granted
   static Future<bool> hasOverlayPermission() async {

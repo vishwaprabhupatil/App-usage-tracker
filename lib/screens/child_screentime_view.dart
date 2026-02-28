@@ -3,8 +3,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import 'blocked_apps_screen.dart';
+import 'usage_analysis_screen.dart'; // <---
 
 /// Screen for parent to view a specific child's screen time.
 class ChildScreentimeView extends StatelessWidget {
@@ -23,21 +25,66 @@ class ChildScreentimeView extends StatelessWidget {
       appBar: AppBar(
         title: Text('$childName\'s Screen Time'),
         actions: [
-          // Block Apps button
-          IconButton(
-            icon: const Icon(Icons.block),
-            tooltip: 'Block Apps',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => BlockedAppsScreen(
-                    childId: childId,
-                    childName: childName,
+          // Menu
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              if (value == 'block') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => BlockedAppsScreen(
+                      childId: childId,
+                      childName: childName,
+                    ),
                   ),
-                ),
-              );
+                );
+              } else if (value == 'analysis') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => UsageAnalysisScreen(
+                      childId: childId,
+                      childName: childName,
+                    ),
+                  ),
+                );
+              } else if (value == 'share') {
+                _showShareAccessDialog(context);
+              }
             },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'analysis',
+                child: Row(
+                  children: [
+                    Icon(Icons.bar_chart, size: 20),
+                    SizedBox(width: 12),
+                    Text('Usage Analysis'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'block',
+                child: Row(
+                  children: [
+                    Icon(Icons.block, size: 20),
+                    SizedBox(width: 12),
+                    Text('Manage Apps'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'share',
+                child: Row(
+                  children: [
+                    Icon(Icons.share, size: 20),
+                    SizedBox(width: 12),
+                    Text('Share Access'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -211,6 +258,7 @@ class ChildScreentimeView extends StatelessWidget {
     final app = appData as Map<String, dynamic>;
     final appName = app['appName'] ?? 'Unknown';
     final duration = app['duration'] ?? '0m';
+    final openCount = (app['openCount'] as num?)?.toInt() ?? 0;
     final iconBase64 = app['icon'] as String?;
 
     // Decode icon from base64 if available
@@ -244,6 +292,13 @@ class ChildScreentimeView extends StatelessWidget {
           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Text(
+          openCount == 1 ? 'Opened 1 time' : 'Opened $openCount times',
+          style: TextStyle(
+            color: Colors.grey[600],
+            fontSize: 12,
+          ),
         ),
         trailing: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -360,5 +415,147 @@ class ChildScreentimeView extends StatelessWidget {
     final mins = int.tryParse(duration.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
     if (mins >= 30) return Colors.amber[700]!;
     return Colors.green;
+  }
+
+  void _showShareAccessDialog(BuildContext context) {
+    final parentId = FirebaseAuth.instance.currentUser!.uid;
+    final codeController = TextEditingController();
+    bool loading = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance.collection('parents').doc(parentId).snapshots(),
+        builder: (context, snapshot) {
+          final parentData = snapshot.data?.data() as Map<String, dynamic>?;
+          final myCode = parentData?['pairingCode'] ?? '...';
+
+          return StatefulBuilder(
+            builder: (context, setState) => AlertDialog(
+              title: const Text('Share Access'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                   Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).primaryColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      children: [
+                        const Text('Your Pairing Code', style: TextStyle(fontSize: 12)),
+                        Text(
+                          myCode,
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Enter another parent\'s pairing code to share access to $childName\'s screen time.',
+                    style: const TextStyle(fontSize: 14, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 20),
+                  TextField(
+                    controller: codeController,
+                    decoration: const InputDecoration(
+                      labelText: 'Parent Pairing Code',
+                      hintText: 'Enter 6-digit code',
+                      border: OutlineInputBorder(),
+                    ),
+                    keyboardType: TextInputType.number,
+                    maxLength: 6,
+                  ),
+                  if (loading)
+                    const Padding(
+                      padding: EdgeInsets.all(8.0),
+                      child: CircularProgressIndicator(),
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: loading
+                      ? null
+                      : () async {
+                          final code = codeController.text.trim();
+                          if (code.length != 6) return;
+
+                          setState(() => loading = true);
+
+                          try {
+                            // 1. Find the other parent by code
+                            final otherParentQuery = await FirebaseFirestore.instance
+                                .collection('parents')
+                                .where('pairingCode', isEqualTo: code)
+                                .limit(1)
+                                .get();
+
+                            if (otherParentQuery.docs.isEmpty) {
+                              if (ctx.mounted) {
+                                ScaffoldMessenger.of(ctx).showSnackBar(
+                                  const SnackBar(content: Text('Invalid code. Parent not found.')),
+                                );
+                              }
+                              setState(() => loading = false);
+                              return;
+                            }
+
+                            final otherParentId = otherParentQuery.docs.first.id;
+
+                            if (otherParentId == parentId) {
+                              if (ctx.mounted) {
+                                ScaffoldMessenger.of(ctx).showSnackBar(
+                                  const SnackBar(content: Text('You cannot share with yourself.')),
+                                );
+                              }
+                              setState(() => loading = false);
+                              return;
+                            }
+
+                            // 2. Add otherParentId to this child's sharedParentIds
+                            await FirebaseFirestore.instance
+                                .collection('children')
+                                .doc(childId)
+                                .update({
+                              'sharedParentIds': FieldValue.arrayUnion([otherParentId])
+                            });
+
+                            if (ctx.mounted) {
+                              Navigator.pop(ctx);
+                              ScaffoldMessenger.of(ctx).showSnackBar(
+                                SnackBar(
+                                  content: Text('Access to $childName shared successfully!'),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            if (ctx.mounted) {
+                              ScaffoldMessenger.of(ctx).showSnackBar(
+                                SnackBar(content: Text('Error sharing access: $e')),
+                              );
+                            }
+                            setState(() => loading = false);
+                          }
+                        },
+                  child: const Text('Share'),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 }

@@ -37,7 +37,7 @@ public class AppBlockerService extends Service {
     private static final String TAG = "AppBlockerService";
     private static final String CHANNEL_ID = "app_blocker_channel";
     private static final int NOTIFICATION_ID = 2001;
-    private static final long CHECK_INTERVAL_MS = 500; // Check every 500ms
+    private static final long CHECK_INTERVAL_MS = 100; // Check every 100ms for strict blocking
     
     // Heartbeat mechanism: record heartbeat every 3 minutes (180 seconds)
     // This is used by ServiceHealthWorker to detect if the service is still alive
@@ -184,6 +184,11 @@ public class AppBlockerService extends Service {
                 instance.hideOverlay();
             }
         }
+        
+        // Immediately check if the current foreground app needs to be blocked
+        if (instance != null && instance.handler != null) {
+            instance.handler.post(() -> instance.checkForegroundApp());
+        }
     }
 
     /**
@@ -285,26 +290,41 @@ public class AppBlockerService extends Service {
         }
     }
 
+    private String lastForegroundApp = null;
+
     private String getForegroundApp() {
         UsageStatsManager usageStatsManager = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         if (usageStatsManager == null) {
-            return null;
+            return lastForegroundApp;
         }
 
         long now = System.currentTimeMillis();
-        UsageEvents events = usageStatsManager.queryEvents(now - 5000, now);
+        // Increase query window significantly if we don't have a recent app, otherwise look back 10s
+        long queryWindow = (lastForegroundApp == null) ? (1000 * 60 * 60) : 10000;
+        UsageEvents events = usageStatsManager.queryEvents(now - queryWindow, now);
 
         String foregroundApp = null;
+        boolean hasEvents = false;
         UsageEvents.Event event = new UsageEvents.Event();
 
         while (events.hasNextEvent()) {
+            hasEvents = true;
             events.getNextEvent(event);
             if (event.getEventType() == UsageEvents.Event.ACTIVITY_RESUMED) {
                 foregroundApp = event.getPackageName();
+            } else if (event.getEventType() == UsageEvents.Event.ACTIVITY_PAUSED ||
+                       event.getEventType() == UsageEvents.Event.ACTIVITY_STOPPED) {
+                if (event.getPackageName().equals(foregroundApp)) {
+                    foregroundApp = null;
+                }
             }
         }
 
-        return foregroundApp;
+        if (hasEvents) {
+            lastForegroundApp = foregroundApp;
+        }
+
+        return lastForegroundApp;
     }
 
     private void showOverlay(String packageName) {

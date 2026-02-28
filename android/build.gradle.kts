@@ -1,3 +1,6 @@
+import com.android.build.gradle.LibraryExtension
+import org.gradle.kotlin.dsl.configure
+
 allprojects {
     repositories {
         google()
@@ -17,6 +20,17 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(":app")
+}
+
+subprojects {
+    // Work around old plugins that don't set `namespace` (required by newer AGP).
+    plugins.withId("com.android.library") {
+        extensions.configure<LibraryExtension> {
+            if (project.name == "device_apps" && namespace == null) {
+                namespace = "fr.g123k.deviceapps"
+            }
+        }
+    }
 }
 
 tasks.register<Delete>("clean") {
