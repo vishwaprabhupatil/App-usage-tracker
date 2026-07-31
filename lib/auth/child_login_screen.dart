@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../utils/google_auth_button.dart';
 import '../screens/child/child_home_screen.dart';
 
 class ChildLoginScreen extends StatefulWidget {
@@ -35,7 +34,7 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     });
     
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
+      await SupabaseConfig.client.auth.signInWithPassword(
         email: email,
         password: password,
       );
@@ -50,78 +49,12 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
         context,
         MaterialPageRoute(builder: (_) => const ChildHomeScreen()),
       );
-    } on FirebaseAuthException catch (e) {
-      String errorMessage;
-      switch (e.code) {
-        case 'user-not-found':
-          errorMessage = 'No account found with this email';
-          break;
-        case 'wrong-password':
-          errorMessage = 'Incorrect password';
-          break;
-        case 'invalid-credential':
-          errorMessage = 'Invalid email or password';
-          break;
-        case 'invalid-email':
-          errorMessage = 'Invalid email address';
-          break;
-        case 'user-disabled':
-          errorMessage = 'This account has been disabled';
-          break;
-        default:
-          errorMessage = e.message ?? 'Login failed';
-      }
-      setState(() => _error = errorMessage);
+    } on AuthException catch (e) {
+      setState(() => _error = e.message);
     } catch (e) {
       setState(() => _error = 'Invalid email or password');
     }
     
-    if (mounted) {
-      setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _googleLogin() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    try {
-      final googleUser = await GoogleSignIn().signIn();
-      if (googleUser == null) {
-        setState(() {
-          _loading = false;
-          _error = 'Google sign-in was cancelled';
-        });
-        return;
-      }
-
-      final googleAuth = await googleUser.authentication;
-
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      await FirebaseAuth.instance.signInWithCredential(credential);
-
-      // Save role
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('userRole', 'child');
-
-      if (!mounted) return;
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const ChildHomeScreen()),
-      );
-    } on FirebaseAuthException catch (e) {
-      setState(() => _error = e.message ?? 'Google sign-in failed');
-    } catch (e) {
-      setState(() => _error = 'Google sign-in failed: ${e.toString()}');
-    }
-
     if (mounted) {
       setState(() => _loading = false);
     }
@@ -209,10 +142,11 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              _orDivider(),
-              const SizedBox(height: 24),
-              GoogleAuthButton(
-                onPressed: _googleLogin,
+              TextButton(
+                onPressed: () {
+                   Navigator.pushNamed(context, '/child_register');
+                },
+                child: const Text("Don't have a child account? Register"),
               ),
             ],
           ),
@@ -250,19 +184,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
           suffixIcon: suffix,
         ),
       ),
-    );
-  }
-
-  Widget _orDivider() {
-    return Row(
-      children: [
-        Expanded(child: Divider(color: Colors.white.withOpacity(0.2))),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12),
-          child: Text('OR'),
-        ),
-        Expanded(child: Divider(color: Colors.white.withOpacity(0.2))),
-      ],
     );
   }
 }

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'parent_entry_screen.dart';
@@ -14,14 +14,16 @@ class RoleRedirectScreen extends StatelessWidget {
     final savedRole = prefs.getString('userRole');
     if (savedRole == 'parent' || savedRole == 'child') return savedRole;
 
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    final childDoc =
-        await FirebaseFirestore.instance.collection('children').doc(uid).get();
+    final user = SupabaseConfig.client.auth.currentUser;
+    if (user == null) return null;
+    
+    final childData = await SupabaseConfig.client
+        .from('children')
+        .select('parent_id')
+        .eq('id', user.id)
+        .maybeSingle();
 
-    final childData = childDoc.data();
-    final parentId = (childData?['parentId'] ?? childData?['parentUid']) as String?;
-
-    if (childDoc.exists && parentId != null && parentId.isNotEmpty) {
+    if (childData != null && childData['parent_id'] != null) {
       return 'child';
     }
 

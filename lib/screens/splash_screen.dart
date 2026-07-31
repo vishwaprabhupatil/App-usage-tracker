@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'role_selection_screen.dart';
@@ -56,9 +57,9 @@ class _SplashScreenState extends State<SplashScreen>
     if (!mounted) return;
 
     // Check if user is logged in
-    final user = FirebaseAuth.instance.currentUser;
+    final session = SupabaseConfig.client.auth.currentSession;
     
-    if (user == null) {
+    if (session == null) {
       // Not logged in - go to role selection
       _navigateTo(const RoleSelectionScreen());
       return;
@@ -104,9 +105,9 @@ class _SplashScreenState extends State<SplashScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Image.asset(
-                  'assets/icons/app_icon.png',
-                  width: 90,
-                  height: 90,
+                  'assets/logo.png',
+                  width: 60,
+                  height: 60,
                 ),
                 const SizedBox(height: 24),
                 Text(

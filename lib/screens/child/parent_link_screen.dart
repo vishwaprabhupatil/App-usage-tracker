@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../supabase_config.dart';
 import '../../services/foreground_sync_service.dart';
 
 /// Screen for child to enter parent's 6-digit code to link accounts.
@@ -32,28 +32,29 @@ class _ParentLinkScreenState extends State<ParentLinkScreen> {
 
   /// Check if already linked to a parent
   Future<void> _checkExistingLink() async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
+    final user = SupabaseConfig.client.auth.currentUser;
+    if (user == null) return;
 
     try {
-      final childDoc = await FirebaseFirestore.instance
-          .collection('children')
-          .doc(uid)
-          .get();
+      final childDoc = await SupabaseConfig.client
+          .from('children')
+          .select()
+          .eq('id', user.id)
+          .maybeSingle();
 
-      final data = childDoc.data();
-      final parentId = (data?['parentId'] ?? data?['parentUid']) as String?;
+      final parentId = childDoc?['parent_id'] as String?;
 
-      if (childDoc.exists && parentId != null && parentId.isNotEmpty) {
+      if (childDoc != null && parentId != null && parentId.isNotEmpty) {
         // Already linked - get parent name
-        final parentDoc = await FirebaseFirestore.instance
-            .collection('parents')
-            .doc(parentId)
-            .get();
+        final parentDoc = await SupabaseConfig.client
+            .from('parents')
+            .select('name')
+            .eq('id', parentId)
+            .maybeSingle();
 
         setState(() {
           _linked = true;
-          _linkedParentName = parentDoc.data()?['name'] ?? 'Parent';
+          _linkedParentName = parentDoc?['name'] ?? 'Parent';
         });
       }
     } catch (e) {
@@ -77,13 +78,13 @@ class _ParentLinkScreenState extends State<ParentLinkScreen> {
 
     try {
       // Find parent with this code
-      final parentQuery = await FirebaseFirestore.instance
-          .collection('parents')
-          .where('pairingCode', isEqualTo: code)
-          .limit(1)
-          .get();
+      final parentDoc = await SupabaseConfig.client
+          .from('parents')
+          .select()
+          .eq('pairing_code', code)
+          .maybeSingle();
 
-      if (parentQuery.docs.isEmpty) {
+      if (parentDoc == null) {
         setState(() {
           _error = 'Invalid code. Please check and try again.';
           _loading = false;
@@ -91,25 +92,27 @@ class _ParentLinkScreenState extends State<ParentLinkScreen> {
         return;
       }
 
-      final parentDoc = parentQuery.docs.first;
-      final parentId = parentDoc.id;
-      final parentName = parentDoc.data()['name'] ?? 'Parent';
+      final parentId = parentDoc['id'];
+      final parentName = parentDoc['name'] ?? 'Parent';
 
-      // Create child entry
-      final childUid = FirebaseAuth.instance.currentUser!.uid;
-      final childName = FirebaseAuth.instance.currentUser!.displayName ?? 'Child';
+      // Create/Update child entry
+      final user = SupabaseConfig.client.auth.currentUser!;
+      final childId = user.id;
+      final childName = user.userMetadata?['name'] ?? user.email ?? 'Child';
 
-      await FirebaseFirestore.instance.collection('children').doc(childUid).set({
-        'parentId': parentId,
-        'childName': childName,
-        'linkedAt': FieldValue.serverTimestamp(),
+      await SupabaseConfig.client.from('children').upsert({
+        'id': childId,
+        'parent_id': parentId,
+        'child_name': childName,
+        'linked_at': DateTime.now().toUtc().toIso8601String(),
       });
 
       // Initialize screentime document
-      await FirebaseFirestore.instance.collection('screentime').doc(childUid).set({
-        'totalTime': '0m',
+      await SupabaseConfig.client.from('screentime').upsert({
+        'id': childId,
+        'total_time': '0m',
         'apps': [],
-        'lastUpdated': FieldValue.serverTimestamp(),
+        'last_updated': DateTime.now().toUtc().toIso8601String(),
       });
       
       // Trigger immediate sync so parent sees data right away
@@ -159,9 +162,19 @@ class _ParentLinkScreenState extends State<ParentLinkScreen> {
     setState(() => _loading = true);
 
     try {
-      final childUid = FirebaseAuth.instance.currentUser!.uid;
-      await FirebaseFirestore.instance.collection('children').doc(childUid).delete();
-      await FirebaseFirestore.instance.collection('screentime').doc(childUid).delete();
+      final childId = SupabaseConfig.client.auth.currentUser!.id;
+      
+      // We don't delete the whole child record, just remove the parent_id
+      await SupabaseConfig.client
+          .from('children')
+          .update({'parent_id': null})
+          .eq('id', childId);
+
+      // Optionally delete screentime data
+      await SupabaseConfig.client
+          .from('screentime')
+          .delete()
+          .eq('id', childId);
 
       setState(() {
         _linked = false;

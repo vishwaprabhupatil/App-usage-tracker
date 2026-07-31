@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 
 /// Screen for parent to manage blocked apps and time limits for a child.
 class BlockedAppsScreen extends StatefulWidget {
@@ -33,17 +34,17 @@ class _BlockedAppsScreenState extends State<BlockedAppsScreen> {
 
   Future<void> _loadChildSettings() async {
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('children')
-          .doc(widget.childId)
-          .get();
+      final data = await SupabaseConfig.client
+          .from('children')
+          .select('blocked_apps, app_limits')
+          .eq('id', widget.childId)
+          .maybeSingle();
 
-      if (doc.exists) {
-        final data = doc.data();
-        final blockedList = data?['blockedApps'] as List<dynamic>?;
+      if (data != null) {
+        final blockedList = data['blocked_apps'] as List<dynamic>?;
         _blockedApps = blockedList?.cast<String>() ?? [];
         
-        final limitsMap = data?['appLimits'] as Map<String, dynamic>?;
+        final limitsMap = data['app_limits'] as Map<String, dynamic>?;
         if (limitsMap != null) {
           _appLimits = limitsMap.map((key, value) => MapEntry(key, value as int));
         }
@@ -98,13 +99,12 @@ class _BlockedAppsScreenState extends State<BlockedAppsScreen> {
     setState(() => _saving = true);
     
     try {
-      await FirebaseFirestore.instance
-          .collection('children')
-          .doc(widget.childId)
-          .set({
-        'blockedApps': _blockedApps,
-        'appLimits': _appLimits,
-      }, SetOptions(merge: true));
+      await SupabaseConfig.client
+          .from('children')
+          .update({
+        'blocked_apps': _blockedApps,
+        'app_limits': _appLimits,
+      }).eq('id', widget.childId);
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -154,17 +154,17 @@ class _BlockedAppsScreenState extends State<BlockedAppsScreen> {
   }
 
   Widget _buildBody() {
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('children')
-          .doc(widget.childId)
-          .snapshots(),
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: SupabaseConfig.client
+          .from('children')
+          .stream(primaryKey: ['id'])
+          .eq('id', widget.childId),
       builder: (context, childSnapshot) {
-        return StreamBuilder<DocumentSnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('screentime')
-              .doc(widget.childId)
-              .snapshots(),
+        return StreamBuilder<List<Map<String, dynamic>>>(
+          stream: SupabaseConfig.client
+              .from('screentime')
+              .stream(primaryKey: ['id'])
+              .eq('id', widget.childId),
           builder: (context, screentimeSnapshot) {
             if (screentimeSnapshot.connectionState == ConnectionState.waiting && 
                 childSnapshot.connectionState == ConnectionState.waiting) {
@@ -175,9 +175,9 @@ class _BlockedAppsScreenState extends State<BlockedAppsScreen> {
             final Map<String, Map<String, dynamic>> consolidatedApps = {};
             
             // 1. Add all installed apps from child document
-            if (childSnapshot.hasData && childSnapshot.data!.exists) {
-              final childData = childSnapshot.data!.data() as Map<String, dynamic>?;
-              final installedApps = (childData?['installedApps'] as List<dynamic>?) ?? [];
+            if (childSnapshot.hasData && childSnapshot.data!.isNotEmpty) {
+              final childData = childSnapshot.data!.first;
+              final installedApps = (childData['installed_apps'] as List<dynamic>?) ?? [];
               
               for (final app in installedApps) {
                 if (app is Map<String, dynamic> && app['packageName'] != null) {
@@ -185,7 +185,7 @@ class _BlockedAppsScreenState extends State<BlockedAppsScreen> {
                     'packageName': app['packageName'],
                     'appName': app['appName'] ?? 'Unknown',
                     'duration': '0m',
-                    'icon': app['icon'],
+                    'icon': app['icon_base64'],
                     'openCount': 0,
                   };
                 }
@@ -193,9 +193,9 @@ class _BlockedAppsScreenState extends State<BlockedAppsScreen> {
             }
             
             // 2. Add/Update with used apps (which have icons and duration)
-            if (screentimeSnapshot.hasData && screentimeSnapshot.data!.exists) {
-              final data = screentimeSnapshot.data!.data() as Map<String, dynamic>?;
-              final usedApps = (data?['apps'] as List<dynamic>?) ?? [];
+            if (screentimeSnapshot.hasData && screentimeSnapshot.data!.isNotEmpty) {
+              final data = screentimeSnapshot.data!.first;
+              final usedApps = (data['apps'] as List<dynamic>?) ?? [];
               
               for (final app in usedApps) {
                 if (app is Map<String, dynamic> && app['packageName'] != null) {

@@ -1,7 +1,8 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 
 class AuthService {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final SupabaseClient _supabase = SupabaseConfig.client;
 
   // SIGN UP
   Future<User?> signUp({
@@ -9,13 +10,12 @@ class AuthService {
     required String email,
     required String password,
   }) async {
-    final userCredential = await _auth.createUserWithEmailAndPassword(
+    final response = await _supabase.auth.signUp(
       email: email,
       password: password,
+      data: {'full_name': name},
     );
-
-    await userCredential.user?.updateDisplayName(name);
-    return userCredential.user;
+    return response.user;
   }
 
   // LOGIN
@@ -23,16 +23,15 @@ class AuthService {
     required String email,
     required String password,
   }) async {
-    final userCredential = await _auth.signInWithEmailAndPassword(
+    final response = await _supabase.auth.signInWithPassword(
       email: email,
       password: password,
     );
-
-    return userCredential.user;
+    return response.user;
   }
 
   // LOGOUT (later use)
   Future<void> logout() async {
-    await _auth.signOut();
+    await _supabase.auth.signOut();
   }
 }

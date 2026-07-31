@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
@@ -70,60 +69,13 @@ class _ParentSignupScreenState extends State<ParentSignupScreen> {
           );
         }
       }
-    } on FirebaseAuthException catch (e) {
-      setState(() => _error = e.message ?? 'Signup failed');
+    } on AuthException catch (e) {
+      setState(() => _error = e.message);
     } catch (e) {
       setState(() => _error = 'Signup failed: $e');
     }
 
     setState(() => _loading = false);
-  }
-
-  Future<void> _googleSignup() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    try {
-      final googleUser = await GoogleSignIn().signIn();
-      if (googleUser == null) {
-        setState(() {
-          _loading = false;
-          _error = 'Google sign-in was cancelled';
-        });
-        return;
-      }
-
-      final googleAuth = await googleUser.authentication;
-
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      await FirebaseAuth.instance.signInWithCredential(credential);
-
-      // Save role
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('userRole', 'parent');
-
-      if (!mounted) return;
-
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const ParentEntryScreen()),
-        (route) => false,
-      );
-    } on FirebaseAuthException catch (e) {
-      setState(() => _error = e.message ?? 'Google sign-in failed');
-    } catch (e) {
-      setState(() => _error = 'Google sign-in failed: ${e.toString()}');
-    }
-
-    if (mounted) {
-      setState(() => _loading = false);
-    }
   }
 
   Widget _inputBox({required Widget child}) {
@@ -271,38 +223,12 @@ class _ParentSignupScreenState extends State<ParentSignupScreen> {
                         ),
                 ),
               ),
-
               const SizedBox(height: 24),
-
-              const Row(
-                children: [
-                  Expanded(child: Divider()),
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 12),
-                    child: Text("OR"),
-                  ),
-                  Expanded(child: Divider()),
-                ],
-              ),
-
-              const SizedBox(height: 16),
-
-              SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: OutlinedButton.icon(
-                  icon: Image.asset(
-                    "assets/icons/google_logo.png",
-                    height: 22,
-                  ),
-                  label: const Text("Continue with Google"),
-                  style: OutlinedButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                  ),
-                  onPressed: _loading ? null : _googleSignup,
-                ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: const Text("Already have an account? Login"),
               ),
             ],
           ),

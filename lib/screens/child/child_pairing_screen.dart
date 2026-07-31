@@ -59,8 +59,8 @@ class _ChildPairingScreenState extends State<ChildPairingScreen> {
                   }
 
                   // 🔒 TODO (later):
-                  // Verify code with Firestore
-                  // Link child UID to parent UID
+                  // Verify code with Supabase
+                  // Link child ID to parent ID
 
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(

@@ -1,10 +1,9 @@
 import 'dart:math';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 
 class PairingService {
-  static final _firestore = FirebaseFirestore.instance;
-  static final _auth = FirebaseAuth.instance;
+  static final _supabase = SupabaseConfig.client;
 
   /// Generates a 6-digit pairing code
   static String generatePairingCode() {
@@ -15,12 +14,16 @@ class PairingService {
   /// Ensures the current parent has a permanent unique 6-digit pairing code.
   /// Returns the existing code if present, otherwise generates and stores a new one.
   static Future<String> ensureParentPairingCode({String? parentName}) async {
-    final user = _auth.currentUser;
+    final user = _supabase.auth.currentUser;
     if (user == null) throw Exception('User not logged in');
 
-    final parentRef = _firestore.collection('parents').doc(user.uid);
-    final parentSnapshot = await parentRef.get();
-    final existingCode = parentSnapshot.data()?['pairingCode']?.toString();
+    final parentData = await _supabase
+        .from('parents')
+        .select('pairing_code')
+        .eq('id', user.id)
+        .maybeSingle();
+    
+    final existingCode = parentData?['pairing_code']?.toString();
 
     if (_isValidPairingCode(existingCode)) {
       return existingCode!;
@@ -29,21 +32,21 @@ class PairingService {
     // Retry bounded times to avoid an infinite loop on unexpected failures.
     for (var attempt = 0; attempt < 20; attempt++) {
       final code = generatePairingCode();
-      final existing = await _firestore
-          .collection('parents')
-          .where('pairingCode', isEqualTo: code)
-          .limit(1)
-          .get();
+      final existing = await _supabase
+          .from('parents')
+          .select('id')
+          .eq('pairing_code', code)
+          .maybeSingle();
 
-      if (existing.docs.isNotEmpty) continue;
+      if (existing != null) continue;
 
-      await parentRef.set({
-        'pairingCode': code,
-        'name': parentName ?? user.displayName ?? 'Parent',
+      await _supabase.from('parents').upsert({
+        'id': user.id,
+        'pairing_code': code,
+        'name': parentName ?? user.userMetadata?['full_name'] ?? 'Parent',
         'email': user.email,
-        'updatedAt': FieldValue.serverTimestamp(),
-        if (!parentSnapshot.exists) 'createdAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+        'updated_at': DateTime.now().toIso8601String(),
+      });
 
       return code;
     }
@@ -66,25 +69,26 @@ class PairingService {
     String pairingCode,
     String deviceName,
   ) async {
-    final user = _auth.currentUser;
+    final user = _supabase.auth.currentUser;
     if (user == null) throw Exception('Child not logged in');
 
-    final query = await _firestore
-        .collection('parents')
-        .where('pairingCode', isEqualTo: pairingCode)
-        .limit(1)
-        .get();
+    final parentData = await _supabase
+        .from('parents')
+        .select('id')
+        .eq('pairing_code', pairingCode)
+        .maybeSingle();
 
-    if (query.docs.isEmpty) {
+    if (parentData == null) {
       throw Exception('Invalid pairing code');
     }
 
-    final parentId = query.docs.first.id;
+    final parentId = parentData['id'];
 
-    await _firestore.collection('children').doc(user.uid).set({
-      'parentUid': parentId,
-      'deviceName': deviceName,
-      'linkedAt': FieldValue.serverTimestamp(),
+    await _supabase.from('children').upsert({
+      'id': user.id,
+      'parent_id': parentId,
+      'device_name': deviceName,
+      'linked_at': DateTime.now().toIso8601String(),
     });
   }
 }

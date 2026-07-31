@@ -1,8 +1,9 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import '../supabase_config.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 
@@ -21,33 +22,42 @@ class UsageAnalysisScreen extends StatefulWidget {
 }
 
 class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
-  String _selectedView = 'Weekly';
+  String _selectedView = 'Monthly';
+  late final ScrollController _chartScrollController;
   
   Map<String, Uint8List?> _appIcons = {};
   
   @override
   void initState() {
     super.initState();
+    _chartScrollController = ScrollController();
     _loadAppIcons();
+  }
+
+  @override
+  void dispose() {
+    _chartScrollController.dispose();
+    super.dispose();
   }
   
   Future<void> _loadAppIcons() async {
     try {
-      final screentimeDoc = await FirebaseFirestore.instance
-          .collection('screentime')
-          .doc(widget.childId)
-          .get();
+      final screentimeDoc = await SupabaseConfig.client
+          .from('screentime')
+          .select('apps')
+          .eq('id', widget.childId)
+          .maybeSingle();
 
-      final childDoc = await FirebaseFirestore.instance
-          .collection('children')
-          .doc(widget.childId)
-          .get();
+      final childDoc = await SupabaseConfig.client
+          .from('children')
+          .select('installed_apps')
+          .eq('id', widget.childId)
+          .maybeSingle();
           
       final Map<String, Uint8List?> icons = {};
 
-      if (screentimeDoc.exists) {
-        final data = screentimeDoc.data();
-        final apps = (data?['apps'] as List<dynamic>?) ?? [];
+      if (screentimeDoc != null) {
+        final apps = (screentimeDoc['apps'] as List<dynamic>?) ?? [];
 
         for (final app in apps) {
           if (app is! Map<String, dynamic>) continue;
@@ -65,13 +75,12 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
       }
 
       // Merge installed-app icons without overwriting existing usage icons.
-      if (childDoc.exists) {
-        final childData = childDoc.data();
-        final installedApps = (childData?['installedApps'] as List<dynamic>?) ?? [];
+      if (childDoc != null) {
+        final installedApps = (childDoc['installed_apps'] as List<dynamic>?) ?? [];
         for (final app in installedApps) {
           if (app is! Map<String, dynamic>) continue;
           final packageName = app['packageName']?.toString();
-          final iconBase64 = app['icon']?.toString();
+          final iconBase64 = app['icon_base64']?.toString();
           if (packageName == null || packageName.isEmpty) continue;
           if (icons.containsKey(packageName) && icons[packageName] != null) continue;
           if (iconBase64 != null && iconBase64.isNotEmpty) {
@@ -145,22 +154,21 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
 
   Widget _buildBody() {
     final bool isMonthly = _selectedView == 'Monthly';
-    final int limit = isMonthly ? 30 : 7;
+    final int limit = isMonthly ? 35 : 7;
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('screentime')
-          .doc(widget.childId)
-          .collection('daily')
-          .orderBy('date', descending: true)
-          .limit(limit)
-          .snapshots(),
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: SupabaseConfig.client
+          .from('daily_usage')
+          .stream(primaryKey: ['id'])
+          .eq('child_id', widget.childId)
+          .order('date', ascending: false)
+          .limit(limit),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
           return const Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -181,42 +189,87 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
           );
         }
 
-        final docs = snapshot.data!.docs.toList();
-        
-        // Ensure we sort by date ascending for the chart (oldest to newest)
-        docs.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
+        final docs = snapshot.data ?? [];
+        final Map<String, Map<String, dynamic>> usageByDate = {};
+        for (final doc in docs) {
+          final dateStr = doc['date']?.toString();
+          if (dateStr != null) {
+            usageByDate[dateStr] = doc;
+          }
+        }
         
         final List<_DailyData> chartData = [];
-        final Map<String, int> aggregateApps = {}; // Package -> Total Minutes
-        final Map<String, int> aggregateOpens = {}; // Package -> Total Opens
-        final Map<String, String> appNames = {}; // Package -> Name
+        final Map<String, int> aggregateApps = {};
+        final Map<String, int> aggregateOpens = {};
+        final Map<String, String> appNames = {};
         
         int maxMinutes = 0;
         int sumMinutes = 0;
+        final now = DateTime.now();
 
-        for (final doc in docs) {
-          final data = doc.data() as Map<String, dynamic>;
-          final int minutes = data['totalMinutes'] ?? 0;
-          final String dateStr = data['date']; // YYYY-MM-DD
+        if (isMonthly) {
+          // Generate entries for all dates of the month (1st to 31st / end of month)
+          final year = now.year;
+          final month = now.month;
+          final daysInMonth = DateTime(year, month + 1, 0).day;
           
-          if (minutes > maxMinutes) maxMinutes = minutes;
-          sumMinutes += minutes;
-          
-          final dateObj = DateTime.parse(dateStr);
-          chartData.add(_DailyData(dateObj, minutes));
-          
-          final apps = (data['apps'] as List<dynamic>?) ?? [];
-          for (final app in apps) {
-            if (app is Map<String, dynamic>) {
-              final String pkg = app['packageName'] ?? '';
-              final String name = app['appName'] ?? 'Unknown';
-              final int appMins = app['minutes'] ?? 0;
-              final int appOpenCount = (app['openCount'] as num?)?.toInt() ?? 0;
-              
-              if (pkg.isNotEmpty && appMins > 0) {
-                aggregateApps[pkg] = (aggregateApps[pkg] ?? 0) + appMins;
-                aggregateOpens[pkg] = (aggregateOpens[pkg] ?? 0) + appOpenCount;
-                appNames[pkg] = name;
+          for (int day = 1; day <= daysInMonth; day++) {
+            final dateObj = DateTime(year, month, day);
+            final dateStr = DateFormat('yyyy-MM-dd').format(dateObj);
+            final doc = usageByDate[dateStr];
+            final int minutes = doc != null ? (doc['total_minutes'] ?? 0) : 0;
+            
+            if (minutes > maxMinutes) maxMinutes = minutes;
+            sumMinutes += minutes;
+            
+            chartData.add(_DailyData(dateObj, minutes));
+            
+            if (doc != null) {
+              final apps = (doc['apps'] as List<dynamic>?) ?? [];
+              for (final app in apps) {
+                if (app is Map<String, dynamic>) {
+                  final String pkg = app['packageName'] ?? '';
+                  final String name = app['appName'] ?? 'Unknown';
+                  final int appMins = app['minutes'] ?? 0;
+                  final int appOpenCount = (app['openCount'] as num?)?.toInt() ?? 0;
+                  
+                  if (pkg.isNotEmpty && appMins > 0) {
+                    aggregateApps[pkg] = (aggregateApps[pkg] ?? 0) + appMins;
+                    aggregateOpens[pkg] = (aggregateOpens[pkg] ?? 0) + appOpenCount;
+                    appNames[pkg] = name;
+                  }
+                }
+              }
+            }
+          }
+        } else {
+          // Past 7 days up to today
+          for (int i = 6; i >= 0; i--) {
+            final dateObj = DateTime(now.year, now.month, now.day - i);
+            final dateStr = DateFormat('yyyy-MM-dd').format(dateObj);
+            final doc = usageByDate[dateStr];
+            final int minutes = doc != null ? (doc['total_minutes'] ?? 0) : 0;
+            
+            if (minutes > maxMinutes) maxMinutes = minutes;
+            sumMinutes += minutes;
+            
+            chartData.add(_DailyData(dateObj, minutes));
+            
+            if (doc != null) {
+              final apps = (doc['apps'] as List<dynamic>?) ?? [];
+              for (final app in apps) {
+                if (app is Map<String, dynamic>) {
+                  final String pkg = app['packageName'] ?? '';
+                  final String name = app['appName'] ?? 'Unknown';
+                  final int appMins = app['minutes'] ?? 0;
+                  final int appOpenCount = (app['openCount'] as num?)?.toInt() ?? 0;
+                  
+                  if (pkg.isNotEmpty && appMins > 0) {
+                    aggregateApps[pkg] = (aggregateApps[pkg] ?? 0) + appMins;
+                    aggregateOpens[pkg] = (aggregateOpens[pkg] ?? 0) + appOpenCount;
+                    appNames[pkg] = name;
+                  }
+                }
               }
             }
           }
@@ -226,7 +279,14 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
         final List<MapEntry<String, int>> sortedApps = aggregateApps.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
           
-        final avgMinutes = docs.isEmpty ? 0 : sumMinutes ~/ docs.length;
+        final avgMinutes = chartData.isEmpty ? 0 : sumMinutes ~/ chartData.length;
+
+        // Auto scroll to today (right side) on load
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_chartScrollController.hasClients) {
+            _chartScrollController.jumpTo(_chartScrollController.position.maxScrollExtent);
+          }
+        });
 
         return SingleChildScrollView(
           child: Column(
@@ -256,7 +316,7 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
                           Text(
                             'Daily Average',
                             style: TextStyle(
-                              color: Theme.of(context).colorScheme.onPrimary.withOpacity(0.8),
+                              color: Theme.of(context).colorScheme.onPrimary.withValues(alpha: 0.8),
                               fontSize: 14,
                             ),
                           ),
@@ -275,30 +335,145 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
                     Icon(
                       Icons.insights,
                       size: 48,
-                      color: Theme.of(context).colorScheme.onPrimary.withOpacity(0.5),
+                      color: Theme.of(context).colorScheme.onPrimary.withValues(alpha: 0.5),
                     ),
                   ],
                 ),
               ),
 
-              // Chart section
+              // Chart section header
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
-                  isMonthly
-                      ? 'Screen Time (Past 30 Days)'
-                      : 'Screen Time (Past 7 Days)',
-                  style: Theme.of(context).textTheme.titleLarge,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      isMonthly
+                          ? 'Screen Time (Past 30 Days)'
+                          : 'Screen Time (Past 7 Days)',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    if (isMonthly)
+                      Row(
+                        children: [
+                          Icon(Icons.swipe, size: 16, color: Colors.grey[500]),
+                          const SizedBox(width: 4),
+                          Text(
+                            '1st - 31st',
+                            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                          ),
+                        ],
+                      ),
+                  ],
                 ),
               ),
               const SizedBox(height: 16),
+              
+              // Scrollable Chart
               SizedBox(
                 height: 250,
                 child: Padding(
                   padding: const EdgeInsets.only(right: 16.0, left: 8.0),
-                  child: _buildChart(chartData, maxMinutes, isMonthly: isMonthly),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      const double itemWidth = 44.0;
+                      final double totalWidth = isMonthly 
+                          ? math.max(constraints.maxWidth, chartData.length * itemWidth)
+                          : constraints.maxWidth;
+                          
+                      return SingleChildScrollView(
+                        controller: _chartScrollController,
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        child: SizedBox(
+                          width: totalWidth,
+                          child: _buildChart(chartData, maxMinutes, isMonthly: isMonthly),
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ),
+              
+              // Date Quick-Scroller Strip below dates (1 to 31st)
+              if (isMonthly) ...[
+                const SizedBox(height: 12),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Scroll Dates (1 to 31st)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      Text(
+                        'Tap date to jump',
+                        style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(
+                  height: 38,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    itemCount: chartData.length,
+                    itemBuilder: (context, index) {
+                      final date = chartData[index].date;
+                      final dayNum = date.day;
+                      final isToday = dayNum == DateTime.now().day && 
+                                      date.month == DateTime.now().month &&
+                                      date.year == DateTime.now().year;
+                      
+                      return GestureDetector(
+                        onTap: () {
+                          if (_chartScrollController.hasClients) {
+                            const double itemWidth = 44.0;
+                            final double targetScroll = (index * itemWidth).clamp(
+                              0.0,
+                              _chartScrollController.position.maxScrollExtent,
+                            );
+                            _chartScrollController.animateTo(
+                              targetScroll,
+                              duration: const Duration(milliseconds: 300),
+                              curve: Curves.easeOut,
+                            );
+                          }
+                        },
+                        child: Container(
+                          margin: const EdgeInsets.only(right: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: isToday 
+                                ? Theme.of(context).colorScheme.primary 
+                                : Theme.of(context).colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Center(
+                            child: Text(
+                              isToday ? 'Today' : '$dayNum',
+                              style: TextStyle(
+                                color: isToday 
+                                    ? Colors.white 
+                                    : Theme.of(context).colorScheme.onSurface,
+                                fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+              
               const SizedBox(height: 24),
 
               // Apps Breakdown
@@ -327,7 +502,6 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
                     final int totalOpens = aggregateOpens[pkg] ?? 0;
                     final String name = appNames[pkg] ?? pkg;
                     
-                    // Simple percentage calculation
                     final double percentage = sumMinutes > 0 ? (totalMins / sumMinutes) * 100 : 0;
                     
                     return _buildAppRow(
@@ -356,7 +530,7 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
 
     return BarChart(
       BarChartData(
-        alignment: BarChartAlignment.spaceAround,
+        alignment: isMonthly ? BarChartAlignment.spaceAround : BarChartAlignment.spaceAround,
         maxY: maxY,
         barTouchData: BarTouchData(
           enabled: true,
@@ -383,7 +557,9 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
                 if (index < 0 || index >= data.length) return const SizedBox.shrink();
                 
                 final DateTime date = data[index].date;
-                final bool isToday = date.day == DateTime.now().day && date.month == DateTime.now().month;
+                final bool isToday = date.day == DateTime.now().day && 
+                                date.month == DateTime.now().month &&
+                                date.year == DateTime.now().year;
                 
                 return Padding(
                   padding: const EdgeInsets.only(top: 8.0),
@@ -404,7 +580,7 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
                 );
               },
               reservedSize: 32,
-              interval: isMonthly ? 5 : 1,
+              interval: 1,
             ),
           ),
           leftTitles: AxisTitles(
@@ -413,7 +589,6 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
               getTitlesWidget: (value, meta) {
                 if (value == 0) return const SizedBox.shrink();
                 
-                // Only show a few labels
                 if (value % 60 == 0) { // Every hour
                   return Text(
                     '${value ~/ 60}h',
@@ -434,7 +609,7 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
           horizontalInterval: 60, // Grid every 1 hour
           getDrawingHorizontalLine: (value) {
             return FlLine(
-              color: Colors.grey.withOpacity(0.2),
+              color: Colors.grey.withValues(alpha: 0.2),
               strokeWidth: 1,
             );
           },
@@ -442,7 +617,8 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
         borderData: FlBorderData(show: false),
         barGroups: List.generate(data.length, (index) {
           final isToday = data[index].date.day == DateTime.now().day && 
-                          data[index].date.month == DateTime.now().month;
+                          data[index].date.month == DateTime.now().month &&
+                          data[index].date.year == DateTime.now().year;
                           
           return BarChartGroupData(
             x: index,
@@ -451,8 +627,8 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
                 toY: data[index].minutes.toDouble(),
                 color: isToday 
                     ? Theme.of(context).colorScheme.primary 
-                    : Theme.of(context).colorScheme.secondary.withOpacity(0.6),
-                width: isMonthly ? 8 : 16,
+                    : Theme.of(context).colorScheme.secondary.withValues(alpha: 0.6),
+                width: isMonthly ? 14 : 20,
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
               ),
             ],
@@ -473,7 +649,6 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          // Basic icon handling (without fetching all images for simplicity)
           _buildAppIcon(name, packageName),
           const SizedBox(width: 12),
           Expanded(
@@ -487,7 +662,6 @@ class _UsageAnalysisScreenState extends State<UsageAnalysisScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
-                // Progress bar
                 Row(
                   children: [
                     Expanded(

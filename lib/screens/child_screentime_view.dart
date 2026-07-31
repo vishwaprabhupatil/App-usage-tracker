@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 
 import 'blocked_apps_screen.dart';
 import 'usage_analysis_screen.dart'; // <---
@@ -105,11 +105,11 @@ class ChildScreentimeView extends StatelessWidget {
         backgroundColor: Colors.red,
         foregroundColor: Colors.white,
       ),
-      body: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('screentime')
-            .doc(childId)
-            .snapshots(),
+      body: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: SupabaseConfig.client
+            .from('screentime')
+            .stream(primaryKey: ['id'])
+            .eq('id', childId),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -119,14 +119,15 @@ class ChildScreentimeView extends StatelessWidget {
             return Center(child: Text('Error: ${snapshot.error}'));
           }
 
-          if (!snapshot.hasData || !snapshot.data!.exists) {
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
             return _buildNoData();
           }
 
-          final data = snapshot.data!.data() as Map<String, dynamic>;
-          final totalTime = data['totalTime'] ?? '0m';
+          final data = snapshot.data!.first;
+          final totalTime = data['total_time'] ?? '0m';
           final apps = (data['apps'] as List<dynamic>?) ?? [];
-          final lastUpdated = data['lastUpdated'] as Timestamp?;
+          final lastUpdatedStr = data['last_updated'] as String?;
+          final lastUpdated = lastUpdatedStr != null ? DateTime.parse(lastUpdatedStr) : null;
 
           return _buildContent(context, totalTime, apps, lastUpdated);
         },
@@ -163,7 +164,7 @@ class ChildScreentimeView extends StatelessWidget {
     BuildContext context,
     String totalTime,
     List<dynamic> apps,
-    Timestamp? lastUpdated,
+    DateTime? lastUpdated,
   ) {
     return CustomScrollView(
       slivers: [
@@ -207,7 +208,7 @@ class ChildScreentimeView extends StatelessWidget {
                 if (lastUpdated != null) ...[
                   const SizedBox(height: 8),
                   Text(
-                    'Updated ${_formatTime(lastUpdated.toDate())}',
+                    'Updated ${_formatTime(lastUpdated)}',
                     style: const TextStyle(color: Colors.white54, fontSize: 11),
                   ),
                 ],
@@ -418,17 +419,20 @@ class ChildScreentimeView extends StatelessWidget {
   }
 
   void _showShareAccessDialog(BuildContext context) {
-    final parentId = FirebaseAuth.instance.currentUser!.uid;
+    final parentId = SupabaseConfig.client.auth.currentUser!.id;
     final codeController = TextEditingController();
     bool loading = false;
 
     showDialog(
       context: context,
-      builder: (ctx) => StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance.collection('parents').doc(parentId).snapshots(),
+      builder: (ctx) => StreamBuilder<List<Map<String, dynamic>>>(
+        stream: SupabaseConfig.client
+            .from('parents')
+            .stream(primaryKey: ['id'])
+            .eq('id', parentId),
         builder: (context, snapshot) {
-          final parentData = snapshot.data?.data() as Map<String, dynamic>?;
-          final myCode = parentData?['pairingCode'] ?? '...';
+          final parentData = snapshot.hasData && snapshot.data!.isNotEmpty ? snapshot.data!.first : null;
+          final myCode = parentData?['pairing_code'] ?? '...';
 
           return StatefulBuilder(
             builder: (context, setState) => AlertDialog(
@@ -495,13 +499,13 @@ class ChildScreentimeView extends StatelessWidget {
 
                           try {
                             // 1. Find the other parent by code
-                            final otherParentQuery = await FirebaseFirestore.instance
-                                .collection('parents')
-                                .where('pairingCode', isEqualTo: code)
-                                .limit(1)
-                                .get();
+                            final otherParentData = await SupabaseConfig.client
+                                .from('parents')
+                                .select('id')
+                                .eq('pairing_code', code)
+                                .maybeSingle();
 
-                            if (otherParentQuery.docs.isEmpty) {
+                            if (otherParentData == null) {
                               if (ctx.mounted) {
                                 ScaffoldMessenger.of(ctx).showSnackBar(
                                   const SnackBar(content: Text('Invalid code. Parent not found.')),
@@ -511,10 +515,10 @@ class ChildScreentimeView extends StatelessWidget {
                               return;
                             }
 
-                            final otherParentId = otherParentQuery.docs.first.id;
+                            final otherParentId = otherParentData['id'];
 
                             if (otherParentId == parentId) {
-                              if (ctx.mounted) {
+                               if (ctx.mounted) {
                                 ScaffoldMessenger.of(ctx).showSnackBar(
                                   const SnackBar(content: Text('You cannot share with yourself.')),
                                 );
@@ -523,13 +527,22 @@ class ChildScreentimeView extends StatelessWidget {
                               return;
                             }
 
-                            // 2. Add otherParentId to this child's sharedParentIds
-                            await FirebaseFirestore.instance
-                                .collection('children')
-                                .doc(childId)
-                                .update({
-                              'sharedParentIds': FieldValue.arrayUnion([otherParentId])
-                            });
+                            // Supabase doesn't easily support arrayUnion in a simple update without an RPC.
+                            // For this mvp-style migration, let's assume we fetch current and update. 
+                            final currentChild = await SupabaseConfig.client
+                                .from('children')
+                                .select('shared_parent_ids')
+                                .eq('id', childId)
+                                .single();
+                            
+                            List<String> sharedIds = List<String>.from(currentChild['shared_parent_ids'] ?? []);
+                            if (!sharedIds.contains(otherParentId)) {
+                               sharedIds.add(otherParentId);
+                               await SupabaseConfig.client
+                                  .from('children')
+                                  .update({'shared_parent_ids': sharedIds})
+                                  .eq('id', childId);
+                            }
 
                             if (ctx.mounted) {
                               Navigator.pop(ctx);

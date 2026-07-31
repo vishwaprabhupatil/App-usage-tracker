@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 import 'package:provider/provider.dart';
 
 import 'child_screentime_view.dart';
@@ -61,7 +61,7 @@ class ParentChildrenScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final parentId = FirebaseAuth.instance.currentUser!.uid;
+    final parentId = SupabaseConfig.client.auth.currentUser!.id;
     final themeController = context.watch<ThemeController>();
     final isDark = themeController.mode == AppThemeMode.dark ||
         (themeController.mode == AppThemeMode.system &&
@@ -118,16 +118,11 @@ class ParentChildrenScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('children')
-            .where(
-              Filter.or(
-                Filter('parentId', isEqualTo: parentId),
-                Filter('sharedParentIds', arrayContains: parentId),
-              ),
-            )
-            .snapshots(),
+      body: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: SupabaseConfig.client
+            .from('children')
+            .stream(primaryKey: ['id'])
+            .eq('parent_id', parentId),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -137,7 +132,7 @@ class ParentChildrenScreen extends StatelessWidget {
             return Center(child: Text('Error: ${snapshot.error}'));
           }
 
-          final children = snapshot.data?.docs ?? [];
+          final children = snapshot.data ?? [];
 
               if (children.isEmpty) {
                 return _buildEmptyState(context);
@@ -147,8 +142,8 @@ class ParentChildrenScreen extends StatelessWidget {
                 padding: const EdgeInsets.all(16),
                 itemCount: children.length,
                 itemBuilder: (context, index) {
-                  final doc = children[index];
-                  return _buildChildCard(context, doc);
+                   final childData = children[index];
+                   return _buildChildCard(context, childData);
                 },
               );
         },
@@ -194,25 +189,27 @@ class ParentChildrenScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildChildCard(BuildContext context, DocumentSnapshot doc) {
-    final childId = doc.id;
-    final childName = doc['childName'] ?? 'Child';
+  Widget _buildChildCard(BuildContext context, Map<String, dynamic> childDoc) {
+    final childId = childDoc['id'];
+    final childName = childDoc['child_name'] ?? 'Child';
 
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('screentime')
-          .doc(childId)
-          .snapshots(),
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: SupabaseConfig.client
+          .from('screentime')
+          .stream(primaryKey: ['id'])
+          .eq('id', childId),
       builder: (context, snapshot) {
         // Determine status from lastUpdated
         DateTime? lastUpdated;
         String totalTime = '0m';
         
-        if (snapshot.hasData && snapshot.data!.exists) {
-          final data = snapshot.data!.data() as Map<String, dynamic>?;
-          totalTime = data?['totalTime'] ?? '0m';
-          final timestamp = data?['lastUpdated'] as Timestamp?;
-          lastUpdated = timestamp?.toDate();
+        if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+          final data = snapshot.data!.first;
+          totalTime = data['total_time'] ?? '0m';
+          final updatedStr = data['last_updated'] as String?;
+          if (updatedStr != null) {
+            lastUpdated = DateTime.parse(updatedStr);
+          }
         }
         
         final status = getChildStatus(lastUpdated);
@@ -349,22 +346,22 @@ class ParentChildrenScreen extends StatelessWidget {
   Future<void> _removeChild(BuildContext context, String childId, String childName) async {
     try {
       // Remove parentId from children collection (unlink)
-      await FirebaseFirestore.instance
-          .collection('children')
-          .doc(childId)
-          .update({'parentId': FieldValue.delete()});
+      await SupabaseConfig.client
+          .from('children')
+          .update({'parent_id': null})
+          .eq('id', childId);
       
       // Optionally delete screentime data
-      await FirebaseFirestore.instance
-          .collection('screentime')
-          .doc(childId)
-          .delete();
+      await SupabaseConfig.client
+          .from('screentime')
+          .delete()
+          .eq('id', childId);
 
-      // Optionally delete blocked apps data
-      await FirebaseFirestore.instance
-          .collection('blocked_apps')
-          .doc(childId)
-          .delete();
+      // Optionally delete daily_usage data
+      await SupabaseConfig.client
+          .from('daily_usage')
+          .delete()
+          .eq('child_id', childId);
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -385,7 +382,6 @@ class ParentChildrenScreen extends StatelessWidget {
       }
     }
   }
-
 
   void _handleMenuAction(String action, BuildContext context) {
     switch (action) {
@@ -427,7 +423,7 @@ class ParentChildrenScreen extends StatelessWidget {
                 );
               }
             },
-            child: const Text('Log Out', style: TextStyle(color: Colors.red)),
+            child: Text('Log Out', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),

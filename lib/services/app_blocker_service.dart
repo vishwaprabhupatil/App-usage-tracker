@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 
 /// Service to check and enforce app blocking on the child's device.
 /// This service communicates with the native Android AppBlockerService.
@@ -17,45 +19,139 @@ class AppBlockerService {
   static StreamSubscription? _blockedAppsSubscription;
   static bool _isInitialized = false;
   static bool _serviceStarted = false;
+
+  static const String _keyBlockedApps = 'cached_blocked_apps';
+  static const String _keyAppLimits = 'cached_app_limits';
   
-  /// Initialize the blocker service and start listening to blocked apps
+  /// Initialize the blocker service, load cached rules immediately, and listen to blocked apps
   static Future<void> init() async {
-    if (_isInitialized) return;
+    // Load local cached rules immediately for instant offline/low-speed blocking
+    await _loadCachedBlockedApps();
+
+    final user = SupabaseConfig.client.auth.currentUser;
+    if (user == null) {
+      debugPrint('AppBlocker: Current user is null - skipping stream subscription for now');
+      return;
+    }
+    
+    if (_isInitialized && _blockedAppsSubscription != null) return;
     _isInitialized = true;
     
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
+    await _blockedAppsSubscription?.cancel();
     
-    // Listen to blocked apps changes from Firestore
-    _blockedAppsSubscription = FirebaseFirestore.instance
-        .collection('children')
-        .doc(uid)
-        .snapshots()
-        .listen((snapshot) async {
-      if (snapshot.exists) {
-        final data = snapshot.data();
+    // Listen to blocked apps changes from Supabase Realtime
+    _blockedAppsSubscription = SupabaseConfig.client
+        .from('children')
+        .stream(primaryKey: ['id'])
+        .eq('id', user.id)
+        .listen((data) async {
+      if (data.isNotEmpty) {
+        final childData = data.first;
         
         // Manual Blocks
-        final blockedList = data?['blockedApps'] as List<dynamic>?;
+        final blockedList = childData['blocked_apps'] as List<dynamic>?;
         _blockedApps = blockedList?.cast<String>() ?? [];
         
         // App Limits
-        final limitsMap = data?['appLimits'] as Map<String, dynamic>?;
+        final limitsMap = childData['app_limits'] as Map<String, dynamic>?;
         if (limitsMap != null) {
           _appLimits = limitsMap.map((key, value) => MapEntry(key, value as int));
         } else {
           _appLimits = {};
         }
+
+        // Clean up over-limit apps whose limit was removed
+        _overLimitApps.removeWhere((pkg) => !_appLimits.containsKey(pkg));
         
-        debugPrint('AppBlocker: Settings updated. Blocked: $_blockedApps, Limits: $_appLimits');
+        debugPrint('AppBlocker: Settings updated from stream. Blocked: $_blockedApps, Limits: $_appLimits');
         
-        // Triger a re-sync to native (Foreground task actually calculates over-limit apps, but we can do a quick check here too if needed, though foreground task will do it continuously)
-        // For now just sync manual blocks, overlimit will be appended by `updateOverLimitApps`
+        // Save to SharedPreferences for instant offline/low-speed fallback
+        await _saveCachedBlockedApps();
+
+        // Trigger a re-sync to native (always syncs, even if empty to unblock)
         await _syncBlockedAppsToNative();
       }
+    }, onError: (error) {
+      debugPrint('AppBlocker: Realtime stream error: $error');
     });
     
-    debugPrint('AppBlocker: Initialized');
+    debugPrint('AppBlocker: Initialized with local cache + Supabase stream');
+  }
+
+  /// Direct REST query fallback to ensure unblock commands are received even if stream stalls
+  static Future<void> refreshFromRemote() async {
+    final user = SupabaseConfig.client.auth.currentUser;
+    if (user == null) return;
+
+    try {
+      final data = await SupabaseConfig.client
+          .from('children')
+          .select('blocked_apps, app_limits')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (data != null) {
+        final blockedList = data['blocked_apps'] as List<dynamic>?;
+        _blockedApps = blockedList?.cast<String>() ?? [];
+        
+        final limitsMap = data['app_limits'] as Map<String, dynamic>?;
+        if (limitsMap != null) {
+          _appLimits = limitsMap.map((key, value) => MapEntry(key, value as int));
+        } else {
+          _appLimits = {};
+        }
+
+        _overLimitApps.removeWhere((pkg) => !_appLimits.containsKey(pkg));
+
+        await _saveCachedBlockedApps();
+        await _syncBlockedAppsToNative();
+        debugPrint('AppBlocker: Direct refresh completed. Total blocked apps: ${blockedApps.length}');
+      }
+    } catch (e) {
+      debugPrint('AppBlocker: Error in direct refresh: $e');
+    }
+  }
+
+  /// Load locally cached block rules from SharedPreferences
+  static Future<void> _loadCachedBlockedApps() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? cachedAppsJson = prefs.getString(_keyBlockedApps);
+      final String? cachedLimitsJson = prefs.getString(_keyAppLimits);
+
+      if (cachedAppsJson != null) {
+        final List<dynamic> decoded = jsonDecode(cachedAppsJson);
+        _blockedApps = decoded.cast<String>();
+      } else {
+        _blockedApps = [];
+      }
+
+      if (cachedLimitsJson != null) {
+        final Map<String, dynamic> decoded = jsonDecode(cachedLimitsJson);
+        _appLimits = decoded.map((k, v) => MapEntry(k, v as int));
+      } else {
+        _appLimits = {};
+      }
+
+      debugPrint('AppBlocker: Loaded cached rules. Blocked: $_blockedApps, Limits: $_appLimits');
+
+      // Always sync to native on load so native side is in full sync (even if empty)
+      await _syncBlockedAppsToNative();
+    } catch (e) {
+      debugPrint('AppBlocker: Error loading cached rules: $e');
+    }
+  }
+
+  /// Save current block rules to SharedPreferences
+  static Future<void> _saveCachedBlockedApps() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_keyBlockedApps, jsonEncode(_blockedApps));
+      await prefs.setString(_keyAppLimits, jsonEncode(_appLimits));
+      debugPrint('AppBlocker: Saved rules to SharedPreferences');
+    } catch (e) {
+      debugPrint('AppBlocker: Error saving cached rules: $e');
+    }
   }
   
   /// Start the native app blocker service

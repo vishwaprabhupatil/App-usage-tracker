@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'supabase_config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'screens/role_selection_screen.dart';
@@ -13,7 +13,7 @@ import 'services/foreground_sync_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+  await SupabaseConfig.initialize();
   
   // Initialize foreground sync service
   await ForegroundSyncService.init();
@@ -58,8 +58,8 @@ class AuthGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
+    return StreamBuilder<AuthState>(
+      stream: SupabaseConfig.client.auth.onAuthStateChange,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
@@ -67,8 +67,10 @@ class AuthGate extends StatelessWidget {
           );
         }
 
+        final session = snapshot.data?.session;
+
         // Not logged in - show role selection
-        if (!snapshot.hasData) {
+        if (session == null) {
           return const RoleSelectionScreen();
         }
 

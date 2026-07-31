@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 import '../services/pairing_service.dart';
 
 import 'parent_children_screen.dart';
 
 /// Screen that displays the parent's permanent pairing code.
-/// Code is generated once and stored permanently in Firestore.
+/// Code is generated once and stored permanently in Supabase.
 class ParentPairingCodeScreen extends StatefulWidget {
   const ParentPairingCodeScreen({super.key});
 
@@ -28,8 +29,9 @@ class _ParentPairingCodeScreenState extends State<ParentPairingCodeScreen> {
     setState(() => _loading = true);
 
     try {
+      final user = SupabaseConfig.client.auth.currentUser;
       final code = await PairingService.ensureParentPairingCode(
-        parentName: FirebaseAuth.instance.currentUser?.displayName,
+        parentName: user?.userMetadata?['name'] ?? user?.email,
       );
       if (mounted) {
         setState(() {

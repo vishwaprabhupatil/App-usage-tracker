@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../utils/google_auth_button.dart';
+import 'auth_service.dart';
 import '../screens/child/child_home_screen.dart';
 
 class ChildRegisterScreen extends StatefulWidget {
@@ -19,7 +19,6 @@ class _ChildRegisterScreenState extends State<ChildRegisterScreen> {
   final _passwordController = TextEditingController();
   bool _obscure = true;
   bool _loading = false;
-  String? _error;
 
   Future<void> _register() async {
     final name = _nameController.text.trim();
@@ -33,80 +32,38 @@ class _ChildRegisterScreenState extends State<ChildRegisterScreen> {
       return;
     }
 
+    setState(() => _loading = true);
+
     try {
-      // Create account
-      final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+      // Create child account
+      final response = await AuthService().signUp(
+        name: name,
         email: email,
         password: password,
       );
 
-      // Save child's name to displayName
-      await credential.user?.updateDisplayName(name);
+      if (response != null) {
+        // Save role
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('userRole', 'child');
 
-      // Save role
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('userRole', 'child');
+        if (!mounted) return;
 
-      if (!mounted) return;
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const ChildHomeScreen()),
-      );
-    } on FirebaseAuthException catch (e) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const ChildHomeScreen()),
+        );
+      }
+    } on AuthException catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Registration failed')),
+        SnackBar(content: Text(e.message)),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e')),
       );
-    }
-  }
-
-  Future<void> _googleSignup() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    try {
-      final googleUser = await GoogleSignIn().signIn();
-      if (googleUser == null) {
-        setState(() {
-          _loading = false;
-          _error = 'Google sign-in was cancelled';
-        });
-        return;
-      }
-
-      final googleAuth = await googleUser.authentication;
-
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      await FirebaseAuth.instance.signInWithCredential(credential);
-
-      // Save role
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('userRole', 'child');
-
-      if (!mounted) return;
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const ChildHomeScreen()),
-      );
-    } on FirebaseAuthException catch (e) {
-      setState(() => _error = e.message ?? 'Google sign-in failed');
-    } catch (e) {
-      setState(() => _error = 'Google sign-in failed: ${e.toString()}');
-    }
-
-    if (mounted) {
-      setState(() => _loading = false);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -147,10 +104,11 @@ class _ChildRegisterScreenState extends State<ChildRegisterScreen> {
               const SizedBox(height: 28),
               _primaryButton('Create account', _register),
               const SizedBox(height: 24),
-              _orDivider(),
-              const SizedBox(height: 24),
-              GoogleAuthButton(
-                onPressed: _googleSignup,
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: const Text("Already have an account? Login"),
               ),
             ],
           ),
@@ -196,22 +154,11 @@ class _ChildRegisterScreenState extends State<ChildRegisterScreen> {
       width: double.infinity,
       height: 52,
       child: ElevatedButton(
-        onPressed: onTap,
-        child: Text(text),
+        onPressed: _loading ? null : onTap,
+        child: _loading 
+          ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+          : Text(text),
       ),
-    );
-  }
-
-  Widget _orDivider() {
-    return Row(
-      children: [
-        Expanded(child: Divider(color: Colors.white.withOpacity(0.2))),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12),
-          child: Text('OR'),
-        ),
-        Expanded(child: Divider(color: Colors.white.withOpacity(0.2))),
-      ],
     );
   }
 }

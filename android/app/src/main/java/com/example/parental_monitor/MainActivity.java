@@ -149,7 +149,7 @@ public class MainActivity extends FlutterActivity {
     }
 
     private void updateBlockedApps(List<String> apps) {
-        AppBlockerService.setBlockedApps(apps != null ? apps : new ArrayList<>());
+        AppBlockerService.setBlockedApps(apps != null ? apps : new ArrayList<>(), getApplicationContext());
     }
 
     private void goToHome() {

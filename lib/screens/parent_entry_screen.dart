@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 import '../services/pairing_service.dart';
 
 import 'parent_pairing_code_screen.dart';
@@ -14,7 +14,7 @@ class ParentEntryScreen extends StatefulWidget {
 }
 
 class _ParentEntryScreenState extends State<ParentEntryScreen> {
-  late final Future<QuerySnapshot> _entryFuture;
+  late Future<List<Map<String, dynamic>>> _entryFuture;
 
   @override
   void initState() {
@@ -22,22 +22,22 @@ class _ParentEntryScreenState extends State<ParentEntryScreen> {
     _entryFuture = _loadParentState();
   }
 
-  Future<QuerySnapshot> _loadParentState() async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
+  Future<List<Map<String, dynamic>>> _loadParentState() async {
+    final uid = SupabaseConfig.client.auth.currentUser!.id;
 
     // Ensure pairing code exists for every logged-in parent account.
     await PairingService.ensureParentPairingCode();
 
-    return FirebaseFirestore.instance
-        .collection('children')
-        .where('parentId', isEqualTo: uid)
-        .limit(1)
-        .get();
+    return SupabaseConfig.client
+        .from('children')
+        .select()
+        .eq('parent_id', uid)
+        .limit(1);
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<QuerySnapshot>(
+    return FutureBuilder<List<Map<String, dynamic>>>(
       future: _entryFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -52,7 +52,9 @@ class _ParentEntryScreenState extends State<ParentEntryScreen> {
           );
         }
 
-        if (snapshot.data!.docs.isEmpty) {
+        final children = snapshot.data ?? [];
+
+        if (children.isEmpty) {
           return const ParentPairingCodeScreen();
         }
 

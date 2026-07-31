@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 
 import 'usage_service.dart';
 import 'package_installer_service.dart';
 
-/// Service to automatically sync screen time to Firebase.
+/// Service to automatically sync screen time to Supabase.
 /// Runs on app startup and syncs periodically.
 class ScreentimeSyncService {
   static Timer? _syncTimer;
@@ -42,35 +42,34 @@ class ScreentimeSyncService {
   /// Sync screen time to Firebase now
   static Future<void> syncNow() async {
     try {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
-      if (uid == null) {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) {
         debugPrint('ScreentimeSyncService: No user logged in');
         return;
       }
 
+      final uid = user.id;
+
       // Check if child is linked to a parent
-      final childDoc = await FirebaseFirestore.instance
-          .collection('children')
-          .doc(uid)
-          .get();
+      final childData = await SupabaseConfig.client
+          .from('children')
+          .select('parent_id')
+          .eq('id', uid)
+          .maybeSingle();
 
-      final childData = childDoc.data() ?? <String, dynamic>{};
-      final parentId =
-          (childData['parentId'] ?? childData['parentUid']) as String?;
-
-      if (!childDoc.exists || parentId == null || parentId.isEmpty) {
+      if (childData == null) {
         debugPrint('ScreentimeSyncService: Not linked to parent, skipping sync');
         return;
       }
 
-      // Backward compatibility: migrate legacy `parentUid` to `parentId`.
-      if (childData['parentId'] == null) {
-        await FirebaseFirestore.instance.collection('children').doc(uid).set({
-          'parentId': parentId,
-        }, SetOptions(merge: true));
+      final parentId = childData['parent_id'] as String?;
+
+      if (parentId == null || parentId.isEmpty) {
+        debugPrint('ScreentimeSyncService: Not linked to parent, skipping sync');
+        return;
       }
 
-      debugPrint('ScreentimeSyncService: Syncing to Firebase...');
+      debugPrint('ScreentimeSyncService: Syncing to Supabase...');
 
       // Get today's usage
       final apps = await UsageService.getTodayUsage();
@@ -116,17 +115,15 @@ class ScreentimeSyncService {
         return item;
       }).toList();
 
-      // Upload to Firebase
-      final screentimeRef = FirebaseFirestore.instance.collection('screentime').doc(uid);
-      final batch = FirebaseFirestore.instance.batch();
-
-      batch.set(screentimeRef, {
-        'totalTime': totalFormatted,
+      // Upload current screentime status
+      await SupabaseConfig.client.from('screentime').upsert({
+        'id': uid,
+        'total_time': totalFormatted,
         'apps': appsList,
-        'lastUpdated': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+        'last_updated': DateTime.now().toIso8601String(),
+      });
 
-      // Keep 30-day daily history updated for weekly/monthly analysis.
+      // Keep 30-day daily history updated
       final now = DateTime.now();
       final endHistory = DateTime(now.year, now.month, now.day)
           .subtract(const Duration(seconds: 1)); // End yesterday
@@ -136,6 +133,8 @@ class ScreentimeSyncService {
       final historyData =
           await UsageService.getDailyUsageForRange(startHistory, endHistory);
 
+      final List<Map<String, dynamic>> dailyUsageUpserts = [];
+
       for (final entry in historyData.entries) {
         final dateStr = entry.key;
         final dayApps = entry.value;
@@ -144,10 +143,10 @@ class ScreentimeSyncService {
           dayTotal += app.duration;
         }
 
-        final dayRef = screentimeRef.collection('daily').doc(dateStr);
-        batch.set(dayRef, {
+        dailyUsageUpserts.add({
+          'child_id': uid,
           'date': dateStr,
-          'totalMinutes': dayTotal.inMinutes,
+          'total_minutes': dayTotal.inMinutes,
           'apps': dayApps
               .map((a) => {
                     'packageName': a.packageName,
@@ -156,16 +155,16 @@ class ScreentimeSyncService {
                     'openCount': a.openCount,
                   })
               .toList(),
-        }, SetOptions(merge: true));
+        });
       }
 
-      // Save today's provisional data as well.
+      // Add today's provisional data
       final todayStr =
           '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-      final todayRef = screentimeRef.collection('daily').doc(todayStr);
-      batch.set(todayRef, {
+      dailyUsageUpserts.add({
+        'child_id': uid,
         'date': todayStr,
-        'totalMinutes': total.inMinutes,
+        'total_minutes': total.inMinutes,
         'apps': usageUpload
             .map((a) => {
                   'packageName': a.packageName,
@@ -174,9 +173,15 @@ class ScreentimeSyncService {
                   'openCount': a.openCount,
                 })
             .toList(),
-      }, SetOptions(merge: true));
+      });
 
-      await batch.commit();
+      // Bulk upsert to daily_usage table
+      if (dailyUsageUpserts.isNotEmpty) {
+         await SupabaseConfig.client.from('daily_usage').upsert(
+           dailyUsageUpserts,
+           onConflict: 'child_id, date'
+         );
+      }
 
       debugPrint(
           'ScreentimeSyncService: Synced - $totalFormatted, ${usageUpload.length} apps');

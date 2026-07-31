@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../supabase_config.dart';
 
 class ChildHomeScreen extends StatelessWidget {
   const ChildHomeScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async => false, // 🔒 Disable back button
+    return PopScope(
+      canPop: false, // 🔒 Disable back button
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Child Device'),
@@ -16,7 +17,7 @@ class ChildHomeScreen extends StatelessWidget {
             IconButton(
               icon: const Icon(Icons.logout),
               onPressed: () async {
-                await FirebaseAuth.instance.signOut();
+                await SupabaseConfig.client.auth.signOut();
               },
             ),
           ],
@@ -51,7 +52,7 @@ class ChildHomeScreen extends StatelessWidget {
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(12),
-                  color: Theme.of(context).colorScheme.surfaceVariant,
+                  color: Theme.of(context).colorScheme.surfaceContainer,
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,

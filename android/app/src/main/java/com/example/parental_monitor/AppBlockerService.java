@@ -28,6 +28,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Set;
+import android.content.SharedPreferences;
 
 /**
  * Foreground service that monitors running apps and shows a blocking overlay
@@ -37,7 +38,9 @@ public class AppBlockerService extends Service {
     private static final String TAG = "AppBlockerService";
     private static final String CHANNEL_ID = "app_blocker_channel";
     private static final int NOTIFICATION_ID = 2001;
-    private static final long CHECK_INTERVAL_MS = 100; // Check every 100ms for strict blocking
+    private static final long CHECK_INTERVAL_MS = 50; // Check every 50ms for instant, zero-delay blocking
+    private static final String PREFS_NAME = "AppBlockerPrefs";
+    private static final String KEY_BLOCKED_APPS = "cached_blocked_apps";
     
     // Heartbeat mechanism: record heartbeat every 3 minutes (180 seconds)
     // This is used by ServiceHealthWorker to detect if the service is still alive
@@ -67,6 +70,9 @@ public class AppBlockerService extends Service {
         handler = new Handler(Looper.getMainLooper());
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         
+        // Load offline cached blocked apps immediately on service creation
+        loadCachedBlockedApps();
+
         // Initialize heartbeat manager and record service start
         heartbeatManager = new HeartbeatManager(this);
         heartbeatManager.recordServiceStart();
@@ -169,18 +175,51 @@ public class AppBlockerService extends Service {
     }
 
     /**
-     * Update the list of blocked apps
+     * Load cached blocked apps list from SharedPreferences for instant offline blocking
      */
-    public static void setBlockedApps(List<String> apps) {
+    private void loadCachedBlockedApps() {
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            Set<String> cached = prefs.getStringSet(KEY_BLOCKED_APPS, null);
+            blockedApps.clear();
+            if (cached != null) {
+                blockedApps.addAll(cached);
+                Log.d(TAG, "Loaded " + cached.size() + " blocked apps from SharedPreferences: " + blockedApps);
+            } else {
+                Log.d(TAG, "No cached blocked apps found in SharedPreferences");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error loading cached blocked apps: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Update the list of blocked apps with Context for SharedPreferences persistence
+     */
+    public static void setBlockedApps(List<String> apps, Context context) {
         blockedApps.clear();
         if (apps != null) {
             blockedApps.addAll(apps);
         }
         Log.d(TAG, "Blocked apps updated: " + blockedApps);
 
-        // If an overlay is showing but the app is no longer blocked, hide it
-        if (instance != null && instance.isOverlayShowing && instance.currentBlockedApp != null) {
-            if (!blockedApps.contains(instance.currentBlockedApp)) {
+        // Save to SharedPreferences for offline persistence
+        Context ctx = context != null ? context : (instance != null ? instance.getApplicationContext() : null);
+        if (ctx != null) {
+            try {
+                SharedPreferences prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                prefs.edit().putStringSet(KEY_BLOCKED_APPS, new HashSet<>(blockedApps)).apply();
+                Log.d(TAG, "Saved blocked apps to SharedPreferences for offline persistence");
+            } catch (Exception e) {
+                Log.e(TAG, "Error saving blocked apps to SharedPreferences: " + e.getMessage());
+            }
+        }
+
+        // If no apps are blocked OR if the currently showing blocked app is no longer in the list, hide the overlay immediately
+        if (instance != null) {
+            if (blockedApps.isEmpty()) {
+                instance.hideOverlay();
+            } else if (instance.currentBlockedApp != null && !blockedApps.contains(instance.currentBlockedApp)) {
                 instance.hideOverlay();
             }
         }
@@ -189,6 +228,10 @@ public class AppBlockerService extends Service {
         if (instance != null && instance.handler != null) {
             instance.handler.post(() -> instance.checkForegroundApp());
         }
+    }
+
+    public static void setBlockedApps(List<String> apps) {
+        setBlockedApps(apps, instance != null ? instance.getApplicationContext() : null);
     }
 
     /**
@@ -367,17 +410,17 @@ public class AppBlockerService extends Service {
     }
 
     private void hideOverlay() {
-        if (overlayView != null && isOverlayShowing) {
+        if (overlayView != null) {
             try {
                 windowManager.removeView(overlayView);
             } catch (Exception e) {
                 Log.e(TAG, "Error hiding overlay: " + e.getMessage());
             }
             overlayView = null;
-            isOverlayShowing = false;
-            currentBlockedApp = null;
-            Log.d(TAG, "Overlay hidden");
         }
+        isOverlayShowing = false;
+        currentBlockedApp = null;
+        Log.d(TAG, "Overlay hidden");
     }
 
     private void goToHome() {

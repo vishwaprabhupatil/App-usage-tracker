@@ -45,8 +45,6 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
   }
 
   Future<void> _startForegroundService() async {
-    // Delay slightly to ensure the home screen is fully visible
-    await Future.delayed(const Duration(milliseconds: 500));
     final started = await ForegroundSyncService.startService();
 
     if (started) {
@@ -116,6 +114,8 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _loadUsage();
+      AppBlockerService.refreshFromRemote();
+      AppBlockerService.init();
       // Trigger immediate sync with direct-write fallback if service is down.
       ForegroundSyncService.triggerSyncNow();
       // Check overlay permission
@@ -133,11 +133,12 @@ class _ChildHomeScreenState extends State<ChildHomeScreen>
 
   Future<void> _initAppBlocker() async {
     await AppBlockerService.init();
+    await AppBlockerService.refreshFromRemote();
     await _checkOverlayPermission();
     await _checkBatteryOptimization();
     
-    // Start the blocker service if permission is granted and there are blocked apps
-    if (_overlayPermissionGranted && AppBlockerService.blockedApps.isNotEmpty) {
+    // Ensure native service is active to receive unblock/block events
+    if (_overlayPermissionGranted) {
       await AppBlockerService.startBlockerService();
     }
   }
